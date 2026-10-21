@@ -15,6 +15,7 @@ export type EventType =
 
 export interface EventEnvelope<T = Record<string, unknown>> {
   id: string;
+  sequenceNumber: number; // Strictly monotonic per-company integer: 1, 2, 3...
   type: EventType;
   schemaVersion: number;
   companyId: CompanyId;
