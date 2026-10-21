@@ -15,7 +15,8 @@ In a multi-tenant platform serving sensitive corporate client DNS queries and au
    - The application database role is explicitly granted only `SELECT, INSERT` on the `events` table. `UPDATE` and `DELETE` permissions are revoked.
 3. **Per-Tenant SHA-256 Hash Chain**:
    - Every audit event row includes: `id`, `company_id`, `occurred_at`, `payload`, `prev_hash`, `hash`.
-   - `hash = SHA256(prev_hash + occurred_at + event_type + company_id + canonical_json(payload))`.
+   - `hash = SHA256(canonical_json({ id, prevHash, occurredAt, type, schemaVersion, companyId, deviceId, payload }))`.
+   - Structured canonical JSON eliminates delimiter injection vulnerabilities and binds event `id` directly into the hash.
    - A corrupt or modified record breaks the chain, rendering tampering immediately detectable.
    - Periodic head hashes are exported and anchored to write-once storage (e.g. S3 Object Lock).
 
