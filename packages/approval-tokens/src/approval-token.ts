@@ -18,6 +18,9 @@
  * UPDATE approval_tokens
  * SET status = 'USED', used_at = NOW()
  * WHERE token_hash = $1
+ *   AND request_id = $2
+ *   AND approver_id = $3
+ *   AND company_id = $4
  *   AND status = 'PENDING'
  *   AND expires_at > NOW()
  * RETURNING id, request_id, approver_id, company_id;
@@ -25,22 +28,28 @@
  * If zero rows are returned by the update, the transaction must rollback and reject
  * the request as already used, expired, or invalid.
  * 
+ * Client-facing error messages must always remain generic (e.g. "Invalid or expired approval request")
+ * to prevent user enumeration, token guessing, or side-channel leakage.
+ * 
  * Raw tokens must NEVER be stored in the database. Only `hashApprovalToken(token)`
  * (SHA-256) is persisted.
  */
 
 import { createHmac, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-export type Clock = () => Date | number;
+export const SUPPORTED_TOKEN_VERSIONS = [1] as const;
+export type SupportedTokenVersion = (typeof SUPPORTED_TOKEN_VERSIONS)[number];
+
+export type Clock = () => number;
 
 export interface ApprovalTokenPayload {
-  version: number;   // Token format version (current: 1)
-  kid: string;       // Key ID for HMAC secret lookup & rotation
+  version: SupportedTokenVersion; // Token format version (current: 1)
+  kid: string;                    // Key ID for HMAC secret lookup & rotation
   requestId: string;
   approverId: string;
   companyId: string;
-  expiresAt: number; // Unix epoch seconds
-  nonce: string;     // 16-byte hex nonce
+  expiresAt: number;              // Unix epoch seconds
+  nonce: string;                  // 16-byte hex nonce
 }
 
 export interface GeneratedApprovalToken {
@@ -56,9 +65,9 @@ export interface GenerateTokenOptions {
   companyId: string;
   secret: string;
   kid?: string;              // Key ID (defaults to 'k1')
-  version?: number;          // Format version (defaults to 1)
-  durationMinutes?: number;  // Defaults to 10 minutes per spec
-  clock?: Clock;             // Injected clock function (defaults to Date.now)
+  version?: number;          // Format version (must be a supported version, defaults to 1)
+  durationMinutes?: number;  // Positive integer between 1 and 60 (defaults to 10)
+  clock?: Clock;             // Injected clock returning epoch milliseconds (no silent fallback)
 }
 
 export interface VerifyTokenOptions {
@@ -68,7 +77,7 @@ export interface VerifyTokenOptions {
   expectedApproverId: string;  // Required: Prevents unauthorized approver impersonation
   expectedCompanyId: string;   // Required: Enforces multi-tenant isolation
   expectedKid?: string;        // Optional key id check
-  clock?: Clock;               // Injected clock function (defaults to Date.now)
+  clock?: Clock;               // Injected clock returning epoch milliseconds (no silent fallback)
 }
 
 export interface TokenVerificationResult {
@@ -101,21 +110,19 @@ function fromBase64Url(str: string): string {
 }
 
 /**
- * Extracts current time in unix epoch seconds from an optional clock injector or system clock.
+ * Extracts current time in unix epoch seconds from clock injector or system clock.
+ * Clock must return epoch milliseconds as a positive integer.
+ * Throws on any invalid value; NEVER provides a silent fallback.
  */
-function getSecondsFromClock(clock?: Clock): number {
+function getNowSeconds(clock?: Clock): number {
   if (!clock) {
     return Math.floor(Date.now() / 1000);
   }
   const val = clock();
-  if (typeof val === 'number') {
-    // If milliseconds returned (> 1e11), convert to seconds; otherwise treat as seconds
-    return val > 1e11 ? Math.floor(val / 1000) : Math.floor(val);
+  if (typeof val !== 'number' || !Number.isFinite(val) || !Number.isInteger(val) || val <= 0) {
+    throw new TypeError(`Clock returned invalid timestamp: ${String(val)}. Clock must return epoch milliseconds as a positive integer.`);
   }
-  if (val instanceof Date) {
-    return Math.floor(val.getTime() / 1000);
-  }
-  return Math.floor(Date.now() / 1000);
+  return Math.floor(val / 1000);
 }
 
 /**
@@ -151,7 +158,7 @@ export function peekTokenHeader(token: string): { version?: number; kid?: string
 
 /**
  * Generates a signed, single-use approval token cryptographically bound to request ID, approver ID,
- * company tenant, and key ID. Valid for 10 minutes by default.
+ * company tenant, and key ID. Valid for 10 minutes by default (bounded 1-60m).
  * 
  * Single-use must be enforced atomically in the database layer when consumed.
  */
@@ -169,12 +176,28 @@ export function generateApprovalToken(options: GenerateTokenOptions): GeneratedA
     throw new Error('Approval token requires a non-empty string companyId');
   }
 
+  // Version check
+  const version = options.version ?? 1;
+  if (typeof version !== 'number' || !Number.isInteger(version) || !SUPPORTED_TOKEN_VERSIONS.includes(version as any)) {
+    throw new Error(`Unsupported token version: ${version}. Supported versions: ${SUPPORTED_TOKEN_VERSIONS.join(', ')}`);
+  }
+
+  // Duration check: bounded positive integer, max 60
   const durationMinutes = options.durationMinutes ?? 10;
-  const nowSeconds = getSecondsFromClock(options.clock);
+  if (
+    typeof durationMinutes !== 'number' ||
+    !Number.isInteger(durationMinutes) ||
+    durationMinutes < 1 ||
+    durationMinutes > 60
+  ) {
+    throw new Error('durationMinutes must be a positive integer between 1 and 60');
+  }
+
+  const nowSeconds = getNowSeconds(options.clock);
   const expiresAtSeconds = nowSeconds + durationMinutes * 60;
 
   const payload: ApprovalTokenPayload = {
-    version: options.version ?? 1,
+    version: version as SupportedTokenVersion,
     kid: options.kid ?? 'k1',
     requestId: options.requestId,
     approverId: options.approverId,
@@ -205,10 +228,11 @@ export function generateApprovalToken(options: GenerateTokenOptions): GeneratedA
  * 
  * Invariants enforced:
  * 1. Required bindings: expectedRequestId, expectedApproverId, and expectedCompanyId must be provided and match.
- * 2. Strict payload schema: Validates JSON shape and strict primitive types (no type pollution).
- * 3. Key rotation: Resolves signing secret by kid if dynamic secret resolver is provided.
- * 4. Timing attack resistance: All signature and binding checks use constant-time comparison.
- * 5. Clock injection: Uses injected clock function or system time to verify 10-minute expiry window.
+ * 2. Supported version: Rejects any token version not currently supported.
+ * 3. Strict payload schema: Validates JSON shape and strict primitive types (no type pollution).
+ * 4. Key rotation: Resolves signing secret by kid if dynamic secret resolver is provided.
+ * 5. Timing attack resistance: All signature and binding checks use constant-time comparison.
+ * 6. Clock injection: Uses injected clock function (epoch ms) or system time to verify 10-minute expiry window.
  * 
  * Note: Single-use must be enforced atomically in the database layer when status is updated from PENDING to USED.
  */
@@ -252,8 +276,12 @@ export function verifyApprovalToken(options: VerifyTokenOptions): TokenVerificat
 
   const p = rawPayload as Record<string, unknown>;
 
-  if (typeof p.version !== 'number' || !Number.isInteger(p.version) || p.version < 1) {
-    return { valid: false, error: 'Malformed token payload: invalid or missing version number' };
+  if (
+    typeof p.version !== 'number' ||
+    !Number.isInteger(p.version) ||
+    !SUPPORTED_TOKEN_VERSIONS.includes(p.version as any)
+  ) {
+    return { valid: false, error: `Malformed token payload: unsupported version ${String(p.version)}` };
   }
   if (typeof p.kid !== 'string' || p.kid.trim().length === 0) {
     return { valid: false, error: 'Malformed token payload: invalid or missing kid string' };
@@ -275,7 +303,7 @@ export function verifyApprovalToken(options: VerifyTokenOptions): TokenVerificat
   }
 
   const payload: ApprovalTokenPayload = {
-    version: p.version,
+    version: p.version as SupportedTokenVersion,
     kid: p.kid,
     requestId: p.requestId,
     approverId: p.approverId,
@@ -310,8 +338,8 @@ export function verifyApprovalToken(options: VerifyTokenOptions): TokenVerificat
     return { valid: false, error: 'Invalid token signature (tampering detected)' };
   }
 
-  // 5. Verify expiration using injected clock or current system time
-  const currentTime = getSecondsFromClock(options.clock);
+  // 5. Verify expiration using injected clock (epoch ms) or current system time
+  const currentTime = getNowSeconds(options.clock);
   if (currentTime > payload.expiresAt) {
     return { valid: false, error: 'Approval token has expired (10-minute limit exceeded)' };
   }

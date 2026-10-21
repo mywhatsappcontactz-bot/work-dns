@@ -46,6 +46,50 @@ describe('Canonical JSON & RFC 8785 Compliance', () => {
   it('throws on BigInt values', () => {
     expect(() => canonicalJson({ big: BigInt(9007199254740991) })).toThrow(/BigInt is not supported/);
   });
+
+  it('throws on Map instances', () => {
+    expect(() => canonicalJson(new Map([['a', 1]]))).toThrow(/Map instances are not allowed/);
+    expect(() => canonicalJson({ m: new Map() })).toThrow(/Map instances are not allowed/);
+  });
+
+  it('throws on Set instances', () => {
+    expect(() => canonicalJson(new Set([1, 2]))).toThrow(/Set instances are not allowed/);
+    expect(() => canonicalJson({ s: new Set() })).toThrow(/Set instances are not allowed/);
+  });
+
+  it('throws on Buffer instances', () => {
+    expect(() => canonicalJson(Buffer.from('hello'))).toThrow(/Buffer instances are not allowed/);
+    expect(() => canonicalJson({ b: Buffer.alloc(4) })).toThrow(/Buffer instances are not allowed/);
+  });
+
+  it('throws on RegExp instances', () => {
+    expect(() => canonicalJson(/abc/)).toThrow(/RegExp instances are not allowed/);
+    expect(() => canonicalJson({ r: /abc/g })).toThrow(/RegExp instances are not allowed/);
+  });
+
+  it('throws on class instances (non-plain objects)', () => {
+    class Foo { x = 1; }
+    expect(() => canonicalJson(new Foo())).toThrow(/Class instances and non-plain objects are not allowed/);
+    expect(() => canonicalJson({ nested: new Foo() })).toThrow(/Class instances and non-plain objects are not allowed/);
+  });
+
+  it('throws when nesting depth exceeds 64', () => {
+    // Build a deeply nested object with depth 65
+    let deep: unknown = { leaf: true };
+    for (let i = 0; i < 65; i++) {
+      deep = { nested: deep };
+    }
+    expect(() => canonicalJson(deep)).toThrow(/Maximum nesting depth of 64 exceeded/);
+  });
+
+  it('accepts nesting up to exactly depth 64', () => {
+    let deep: unknown = { leaf: true };
+    for (let i = 0; i < 63; i++) {
+      deep = { n: deep };
+    }
+    // Should not throw — exactly 64 levels of recursion
+    expect(() => canonicalJson(deep)).not.toThrow();
+  });
 });
 
 describe('Audit Log - Tamper-Evident Hash Chain', () => {
@@ -54,6 +98,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
   it('generates a valid SHA-256 hash envelope for an event', () => {
     const event = createEventEnvelope({
       id: 'evt-1',
+      sequenceNumber: 1,
       type: 'device_enrolled',
       companyId,
       deviceId: 'dev-1',
@@ -69,6 +114,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
   it('detects tampering when an adversary modifies the event id (fails on old code where id was omitted from hash)', () => {
     const event = createEventEnvelope({
       id: 'evt-original',
+      sequenceNumber: 1,
       type: 'dns_blocked',
       companyId,
       deviceId: 'dev-1',
@@ -86,7 +132,10 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
     // Old code passes because computeEventHash did not include params.id in hash computation
     expect(verifyEventHash(tamperedEvent)).toBe(false);
 
-    const verification = verifyEventChain([tamperedEvent], GENESIS_HASH);
+    const verification = verifyEventChain([tamperedEvent], {
+      expectedCompanyId: companyId,
+      expectedAnchorHash: GENESIS_HASH,
+    });
     expect(verification.valid).toBe(false);
     expect(verification.error).toMatch(/tampering detected/i);
   });
@@ -100,6 +149,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
     // Both joined to: "...|corp|injected||..." producing identical hashes.
     const commonParams = {
       id: 'evt-col-1',
+      sequenceNumber: 1,
       type: 'dns_blocked' as const,
       schemaVersion: 1,
       occurredAt: '2026-10-21T00:00:00.000Z',
@@ -126,6 +176,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
   it('detects a deleted first event when verified against expected genesis hash (fails on old code)', () => {
     const e1 = createEventEnvelope({
       id: 'evt-1',
+      sequenceNumber: 1,
       type: 'device_enrolled',
       companyId,
       payload: {},
@@ -134,6 +185,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
 
     const e2 = createEventEnvelope({
       id: 'evt-2',
+      sequenceNumber: 2,
       type: 'dns_blocked',
       companyId,
       payload: { domain: 'gambling.com' },
@@ -142,6 +194,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
 
     const e3 = createEventEnvelope({
       id: 'evt-3',
+      sequenceNumber: 3,
       type: 'heartbeat_missed',
       companyId,
       payload: {},
@@ -152,7 +205,10 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
     const chainMissingGenesis = [e2, e3];
 
     // Old code only checked linkage for i > 0, so [e2, e3] was accepted as valid!
-    const verification = verifyEventChain(chainMissingGenesis, GENESIS_HASH);
+    const verification = verifyEventChain(chainMissingGenesis, {
+      expectedCompanyId: companyId,
+      expectedAnchorHash: GENESIS_HASH,
+    });
     expect(verification.valid).toBe(false);
     expect(verification.brokenIndex).toBe(0);
     expect(verification.error).toMatch(/does not match expected anchor hash/i);
@@ -161,6 +217,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
   it('rejects a mixed-company chain across tenants (fails on old code)', () => {
     const e1 = createEventEnvelope({
       id: 'evt-1',
+      sequenceNumber: 1,
       type: 'device_enrolled',
       companyId: 'company-tenant-alpha',
       payload: { note: 'Alpha event' },
@@ -170,6 +227,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
     // Adversary inserts an event from Beta into Alpha's audit chain
     const e2 = createEventEnvelope({
       id: 'evt-2',
+      sequenceNumber: 2,
       type: 'dns_blocked',
       companyId: 'company-tenant-beta',
       payload: { note: 'Beta event' },
@@ -177,7 +235,10 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
     });
 
     // Old code never checked companyId continuity, allowing cross-tenant chain pollution
-    const verification = verifyEventChain([e1, e2], GENESIS_HASH);
+    const verification = verifyEventChain([e1, e2], {
+      expectedCompanyId: 'company-tenant-alpha',
+      expectedAnchorHash: GENESIS_HASH,
+    });
     expect(verification.valid).toBe(false);
     expect(verification.brokenIndex).toBe(1);
     expect(verification.error).toMatch(/mixed-company chain detected/i);
@@ -186,6 +247,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
   it('rejects chains with duplicate event IDs', () => {
     const e1 = createEventEnvelope({
       id: 'evt-shared-id',
+      sequenceNumber: 1,
       type: 'device_enrolled',
       companyId,
       payload: { seq: 1 },
@@ -194,13 +256,17 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
 
     const e2 = createEventEnvelope({
       id: 'evt-shared-id', // Duplicate id!
+      sequenceNumber: 2,
       type: 'aup_acknowledged',
       companyId,
       payload: { seq: 2 },
       prevHash: e1.hash,
     });
 
-    const verification = verifyEventChain([e1, e2], GENESIS_HASH);
+    const verification = verifyEventChain([e1, e2], {
+      expectedCompanyId: companyId,
+      expectedAnchorHash: GENESIS_HASH,
+    });
     expect(verification.valid).toBe(false);
     expect(verification.brokenIndex).toBe(1);
     expect(verification.error).toMatch(/duplicate event id detected/i);
@@ -211,6 +277,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
 
     const e1 = createEventEnvelope({
       id: 'evt-1',
+      sequenceNumber: 1,
       type: 'device_enrolled',
       companyId,
       deviceId: 'dev-1',
@@ -222,6 +289,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
 
     const e2 = createEventEnvelope({
       id: 'evt-2',
+      sequenceNumber: 2,
       type: 'aup_acknowledged',
       companyId,
       deviceId: 'dev-1',
@@ -233,6 +301,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
 
     const e3 = createEventEnvelope({
       id: 'evt-3',
+      sequenceNumber: 3,
       type: 'dns_blocked',
       companyId,
       deviceId: 'dev-1',
@@ -242,13 +311,17 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
     });
     chain.push(e3);
 
-    const verification = verifyEventChain(chain, GENESIS_HASH);
+    const verification = verifyEventChain(chain, {
+      expectedCompanyId: companyId,
+      expectedAnchorHash: GENESIS_HASH,
+    });
     expect(verification.valid).toBe(true);
   });
 
   it('detects payload tampering within an audit event', () => {
     const e1 = createEventEnvelope({
       id: 'evt-1',
+      sequenceNumber: 1,
       type: 'dns_blocked',
       companyId,
       deviceId: 'dev-1',
@@ -259,6 +332,7 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
 
     const e2 = createEventEnvelope({
       id: 'evt-2',
+      sequenceNumber: 2,
       type: 'access_requested',
       companyId,
       deviceId: 'dev-1',
@@ -273,9 +347,36 @@ describe('Audit Log - Tamper-Evident Hash Chain', () => {
       payload: { domain: 'innocent-site.com' },
     };
 
-    const verification = verifyEventChain([tamperedE1, e2], GENESIS_HASH);
+    const verification = verifyEventChain([tamperedE1, e2], {
+      expectedCompanyId: companyId,
+      expectedAnchorHash: GENESIS_HASH,
+    });
     expect(verification.valid).toBe(false);
     expect(verification.brokenIndex).toBe(0);
     expect(verification.error).toMatch(/tampering detected/i);
+  });
+
+  it('fails when expectedCompanyId is not provided', () => {
+    const e1 = createEventEnvelope({
+      id: 'evt-1',
+      sequenceNumber: 1,
+      type: 'device_enrolled',
+      companyId,
+      payload: {},
+      prevHash: GENESIS_HASH,
+    });
+
+    // Passing empty string as expectedCompanyId should be rejected
+    const r1 = verifyEventChain([e1], {
+      expectedCompanyId: '' as any,
+      expectedAnchorHash: GENESIS_HASH,
+    });
+    expect(r1.valid).toBe(false);
+    expect(r1.error).toMatch(/expectedCompanyId/i);
+
+    // Passing an object without expectedCompanyId should be rejected
+    const r2 = verifyEventChain([e1], {} as any);
+    expect(r2.valid).toBe(false);
+    expect(r2.error).toMatch(/expectedCompanyId/i);
   });
 });

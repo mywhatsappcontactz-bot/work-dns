@@ -206,8 +206,10 @@ describe('Approval Tokens - Cryptographic Binding, Validation & Expiry', () => {
   });
 
   it('supports clock injection for testable time control without exposing currentTimeSeconds in production signature', () => {
-    const fixedNow = 1770000000; // Fixed epoch seconds
-    const mockClock = () => fixedNow;
+    // Clock returns epoch MILLISECONDS; the source converts to seconds via Math.floor(val / 1000)
+    const fixedNowMs = 1770000000000; // Fixed epoch milliseconds
+    const fixedNowSeconds = Math.floor(fixedNowMs / 1000); // 1770000000
+    const mockClock = () => fixedNowMs;
 
     const { token, payload } = generateApprovalToken({
       requestId,
@@ -218,27 +220,27 @@ describe('Approval Tokens - Cryptographic Binding, Validation & Expiry', () => {
       clock: mockClock,
     });
 
-    expect(payload.expiresAt).toBe(fixedNow + 600);
+    expect(payload.expiresAt).toBe(fixedNowSeconds + 600);
 
-    // 1. Verify within valid time window using injected clock
+    // 1. Verify within valid time window using injected clock (epoch ms)
     const validResult = verifyApprovalToken({
       token,
       secret,
       expectedRequestId: requestId,
       expectedApproverId: approverId,
       expectedCompanyId: companyId,
-      clock: () => fixedNow + 300, // 5 minutes later
+      clock: () => fixedNowMs + 300_000, // 5 minutes later in ms
     });
     expect(validResult.valid).toBe(true);
 
-    // 2. Reject after expiration using injected clock
+    // 2. Reject after expiration using injected clock (epoch ms)
     const expiredResult = verifyApprovalToken({
       token,
       secret,
       expectedRequestId: requestId,
       expectedApproverId: approverId,
       expectedCompanyId: companyId,
-      clock: () => fixedNow + 601, // 10 minutes and 1 second later
+      clock: () => fixedNowMs + 601_000, // 10 minutes and 1 second later in ms
     });
     expect(expiredResult.valid).toBe(false);
     expect(expiredResult.error).toMatch(/expired/i);
@@ -348,5 +350,81 @@ describe('Approval Tokens - Cryptographic Binding, Validation & Expiry', () => {
     expect(constantTimeCompare('secret-token-1234', 'secret-token-1234')).toBe(true);
     expect(constantTimeCompare('secret-token-1234', 'secret-token-1235')).toBe(false);
     expect(constantTimeCompare('short', 'longer-string')).toBe(false);
+  });
+
+  it('rejects an unsupported token version', () => {
+    expect(() => generateApprovalToken({
+      requestId,
+      approverId,
+      companyId,
+      secret,
+      version: 99,
+    })).toThrow(/unsupported token version/i);
+
+    expect(() => generateApprovalToken({
+      requestId,
+      approverId,
+      companyId,
+      secret,
+      version: 0,
+    })).toThrow(/unsupported token version/i);
+  });
+
+  it('rejects invalid durationMinutes values', () => {
+    // Non-integer
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      durationMinutes: 5.5,
+    })).toThrow(/durationMinutes must be a positive integer between 1 and 60/);
+
+    // Zero
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      durationMinutes: 0,
+    })).toThrow(/durationMinutes must be a positive integer between 1 and 60/);
+
+    // Negative
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      durationMinutes: -1,
+    })).toThrow(/durationMinutes must be a positive integer between 1 and 60/);
+
+    // Exceeds max
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      durationMinutes: 61,
+    })).toThrow(/durationMinutes must be a positive integer between 1 and 60/);
+  });
+
+  it('throws on invalid clock values (non-integer, negative, NaN, Infinity)', () => {
+    // NaN
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      clock: () => NaN,
+    })).toThrow(/Clock returned invalid timestamp/);
+
+    // Infinity
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      clock: () => Infinity,
+    })).toThrow(/Clock returned invalid timestamp/);
+
+    // Negative
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      clock: () => -1,
+    })).toThrow(/Clock returned invalid timestamp/);
+
+    // Non-integer
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      clock: () => 1770000000.5,
+    })).toThrow(/Clock returned invalid timestamp/);
+
+    // Zero
+    expect(() => generateApprovalToken({
+      requestId, approverId, companyId, secret,
+      clock: () => 0,
+    })).toThrow(/Clock returned invalid timestamp/);
   });
 });
