@@ -1,0 +1,24 @@
+{
+  "name": "@work-dns/module-contract",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@work-dns/shared-types": "*",
+    "@work-dns/policy-engine": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,6 @@
+Contact: mailto:security@work-dns.local
+Expires: 2027-12-31T23:59:59.000Z
+Preferred-Languages: en
+Policy: https://github.com/efe-work-dns/platform/blob/main/docs/threat-model.md
+Acknowledgments: https://github.com/efe-work-dns/platform/blob/main/docs/hall-of-fame.md
+Canonical: https://work-dns.local/.well-known/security.txt

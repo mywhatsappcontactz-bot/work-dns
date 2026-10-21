@@ -1,0 +1,20 @@
+{
+  "name": "@work-dns/module-category-rules",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@work-dns/shared-types": "*",
+    "@work-dns/policy-engine": "*",
+    "@work-dns/module-contract": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
