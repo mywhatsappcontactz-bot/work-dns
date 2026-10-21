@@ -35,7 +35,7 @@ export class DeviceAuthenticator {
    * Registers or updates a device token hash in the gateway's fast in-memory cache.
    */
   public registerTokenHash(tokenHash: string, context: AuthenticatedDeviceContext): void {
-    this.tokenStore.set(tokenHash, context);
+    this.tokenStore.set(tokenHash, { ...context });
   }
 
   /**
@@ -57,7 +57,7 @@ export class DeviceAuthenticator {
     errorMessage?: string;
     context?: AuthenticatedDeviceContext;
   } {
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (!authHeader || !/^bearer /i.test(authHeader)) {
       return {
         authenticated: false,
         errorStatus: 401,
