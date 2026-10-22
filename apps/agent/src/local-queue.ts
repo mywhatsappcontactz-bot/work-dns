@@ -152,12 +152,23 @@ export class LocalEventQueue {
     transmitter: (events: QueuedOfflineEvent[]) => Promise<void>,
     batchSize = 500
   ): Promise<number> {
+    if (!Number.isInteger(batchSize) || batchSize < 1) {
+      throw new RangeError('LocalEventQueue.flush: batchSize must be a positive integer');
+    }
     if (this.flushing) return 0;
     this.flushing = true;
     let delivered = 0;
     try {
-      while (this.items.length > 0) {
-        const batch = this.items.slice(0, batchSize).map((event) => ({ ...event }));
+      // Only events queued when the flush started are delivered by this call; later arrivals
+      // wait for the next flush, so one call cannot run forever on a busy device.
+      let remaining = this.items.length;
+      while (remaining > 0 && this.items.length > 0) {
+        const inFlight = this.items.slice(0, Math.min(batchSize, remaining));
+        // Repeats arriving while these are in flight must become new events, not change sent ones.
+        for (const item of inFlight) {
+          this.forget(item);
+        }
+        const batch = inFlight.map((event) => ({ ...event }));
         await transmitter(batch);
         const ids = new Set(batch.map((event) => event.id));
         this.items = this.items.filter((event) => {
@@ -168,6 +179,7 @@ export class LocalEventQueue {
           return true;
         });
         delivered += batch.length;
+        remaining -= batch.length;
         this.rewrite();
       }
       return delivered;

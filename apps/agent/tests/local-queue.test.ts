@@ -83,9 +83,25 @@ describe('LocalEventQueue', () => {
     });
 
     expect(count).toBe(2);
-    expect(delivered.slice(0, 2)).toEqual(['a.com', 'b.com']);
-    expect(q.getItems().map((e) => e.domain)).toEqual([]); // loop continued and delivered the late event too
-    expect(delivered).toContain('added-during-send.com');
+    expect(delivered).toEqual(['a.com', 'b.com']);
+    expect(q.getItems().map((e) => e.domain)).toEqual(['added-during-send.com']);
+  });
+
+  it('records a repeat that arrives while its event is being sent as a new event', async () => {
+    const q = make();
+    q.enqueue(event('a.com'));
+    await q.flush(async () => {
+      q.enqueue(event('a.com'));
+    });
+    expect(q.getItems()).toHaveLength(1);
+    expect(q.getItems()[0]!.occurrences).toBe(1);
+  });
+
+  it('rejects an invalid batch size without touching the queue', async () => {
+    const q = make();
+    q.enqueue(event('a.com'));
+    await expect(q.flush(async () => {}, 0)).rejects.toThrow(/batchSize/);
+    expect(q.getCount()).toBe(1);
   });
 
   it('keeps every event and propagates the error when the transmitter fails', async () => {

@@ -321,7 +321,8 @@ describe('DnsStubServer', () => {
 
     release();
     expect(dnsPacket.decode(await first).answers).toHaveLength(1);
-    const third = await stub.handleQuery(query('mail.google.com', 3));
+    // The fake gateway always answers with id 1, so the follow-up query must use id 1.
+    const third = await stub.handleQuery(query('mail.google.com', 1));
     expect(rcodeOf(third)).toBe(0);
   });
 
