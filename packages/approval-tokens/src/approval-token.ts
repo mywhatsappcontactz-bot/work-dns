@@ -142,7 +142,7 @@ export function constantTimeCompare(a: string, b: string): boolean {
 /**
  * Extracts unverified token header/metadata for key rotation lookup prior to signature validation.
  */
-export function peekTokenHeader(token: string): { version?: number; kid?: string } | null {
+export function peekTokenHeader(token: string): { version?: number | undefined; kid?: string | undefined } | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 2 || !parts[0]) return null;

@@ -6,7 +6,6 @@ import {
 import {
   CategoryRuleEvaluator,
   CATEGORY_DOMAINS,
-  CategoryRule,
 } from './category-rule-evaluator.js';
 
 export * from './category-rule-evaluator.js';
