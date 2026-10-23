@@ -18,6 +18,8 @@ export interface UpstreamResolverConfig {
   now: () => number;
   /** Allow http:// upstream URLs (tests only). */
   allowInsecureHttp: boolean;
+  /** How long a failing upstream is skipped before it is tried first again. 0 disables. */
+  failureCooldownMs: number;
 }
 
 interface CacheEntry {
@@ -102,6 +104,7 @@ function assertUrlAllowed(url: string, allowInsecureHttp: boolean): void {
 export class UpstreamResolver {
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, Promise<Buffer>>();
+  private readonly downUntilMs = new Map<string, number>();
   private readonly config: UpstreamResolverConfig;
 
   constructor(config: Partial<UpstreamResolverConfig> = {}) {
@@ -116,6 +119,7 @@ export class UpstreamResolver {
       fetchImpl: config.fetchImpl ?? fetch,
       now: config.now ?? Date.now,
       allowInsecureHttp: config.allowInsecureHttp ?? false,
+      failureCooldownMs: config.failureCooldownMs ?? 30_000,
     };
 
     assertUrlAllowed(this.config.primaryUrl, this.config.allowInsecureHttp);
@@ -200,19 +204,33 @@ export class UpstreamResolver {
     return { key: `${name}|${type}|${className}`, name, type, className };
   }
 
+  private isDown(url: string): boolean {
+    const until = this.downUntilMs.get(url);
+    return until !== undefined && until > this.config.now();
+  }
+
   private async fetchValidated(upstreamQuery: Buffer, signature: QuerySignature): Promise<Buffer> {
-    let result: { response: Buffer; decoded: dnsPacket.Packet };
-    try {
-      result = await this.fetchAndValidate(this.config.primaryUrl, upstreamQuery, signature);
-    } catch (primaryErr) {
-      logError('primary upstream failed, trying secondary', {
-        url: this.config.primaryUrl,
-        error: errorMessageOf(primaryErr),
-      });
-      result = await this.fetchAndValidate(this.config.secondaryUrl, upstreamQuery, signature);
+    const { primaryUrl, secondaryUrl } = this.config;
+    // Skip a recently failed primary, but only if the secondary is not also failing.
+    const order =
+      this.isDown(primaryUrl) && !this.isDown(secondaryUrl) ? [secondaryUrl, primaryUrl] : [primaryUrl, secondaryUrl];
+
+    let lastError: unknown;
+    for (const url of order) {
+      try {
+        const result = await this.fetchAndValidate(url, upstreamQuery, signature);
+        this.downUntilMs.delete(url);
+        this.store(signature.key, result.response, result.decoded);
+        return result.response;
+      } catch (err) {
+        lastError = err;
+        if (this.config.failureCooldownMs > 0) {
+          this.downUntilMs.set(url, this.config.now() + this.config.failureCooldownMs);
+        }
+        logError('upstream failed', { url, error: errorMessageOf(err) });
+      }
     }
-    this.store(signature.key, result.response, result.decoded);
-    return result.response;
+    throw lastError;
   }
 
   private async fetchAndValidate(
