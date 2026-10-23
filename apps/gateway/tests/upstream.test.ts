@@ -108,7 +108,7 @@ describe('UpstreamResolver', () => {
 
     expect(out.readUInt16BE(0)).toBe(4242);
     const [url, init] = fetchImpl.mock.calls[0]!;
-    expect(url).toBe('https://1.1.1.1/dns-query');
+    expect(url).toBe('https://9.9.9.9/dns-query');
     expect(init.method).toBe('POST');
     expect(init.redirect).toBe('error');
     expect(init.headers['Content-Type']).toBe('application/dns-message');
@@ -192,8 +192,8 @@ describe('UpstreamResolver', () => {
     const out = await make().resolve(query('example.com', 12));
     expect(out.readUInt16BE(0)).toBe(12);
     expect(fetchImpl.mock.calls.map((call) => call[0])).toEqual([
-      'https://1.1.1.1/dns-query',
       'https://9.9.9.9/dns-query',
+      'https://cloudflare-dns.com/dns-query',
     ]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(String(errorSpy.mock.calls[0]![0])).toContain('id mismatch');
