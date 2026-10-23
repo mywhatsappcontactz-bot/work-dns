@@ -5,8 +5,8 @@ const HEADER_LENGTH = 12;
 const TRUNCATED_BIT = 0x02; // TC flag, in header byte 2
 
 export interface UpstreamResolverConfig {
-  primaryUrl: string; // default "https://9.9.9.9/dns-query"
-  secondaryUrl: string; // default "https://cloudflare-dns.com/dns-query"
+  primaryUrl: string; // default "https://cloudflare-dns.com/dns-query"
+  secondaryUrl: string; // default "https://9.9.9.9/dns-query"
   timeoutMs: number;
   maxCacheEntries: number;
   maxResponseBytes: number;
@@ -109,8 +109,8 @@ export class UpstreamResolver {
 
   constructor(config: Partial<UpstreamResolverConfig> = {}) {
     this.config = {
-      primaryUrl: config.primaryUrl ?? 'https://9.9.9.9/dns-query',
-      secondaryUrl: config.secondaryUrl ?? 'https://cloudflare-dns.com/dns-query',
+      primaryUrl: config.primaryUrl ?? 'https://cloudflare-dns.com/dns-query',
+      secondaryUrl: config.secondaryUrl ?? 'https://9.9.9.9/dns-query',
       timeoutMs: config.timeoutMs ?? 2500,
       maxCacheEntries: config.maxCacheEntries ?? 10_000,
       maxResponseBytes: config.maxResponseBytes ?? 16_384,
