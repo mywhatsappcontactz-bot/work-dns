@@ -21,8 +21,8 @@ Observed on the Phase 0 laptop (Arch, wifi connection "Airtel_X25A_4650", device
 ## Decision
 
 1. Method: runtime-only `nmcli device modify` on the active device. Nothing is written to the saved profile, so a reboot also clears it.
-2. Enforce: set ipv4.dns 127.0.0.1, ipv6.dns ::1, and ipv4/ipv6.ignore-auto-dns yes.
-3. Backup: before enforcing, record the device's current ipv4.dns, ipv6.dns and both ignore-auto-dns values to a root-owned file. Restore writes those values back.
+2. Enforce: set ipv4.dns 127.0.0.1, clear ipv6.dns, and set ipv4/ipv6.ignore-auto-dns yes. IPv6 DNS is cleared, not pointed at ::1, because the stub's IPv6 listening is unverified. This still blocks the router's IPv6 resolver.
+3. Backup: before enforcing, record the device's current ipv4.dns, ipv6.dns and both ignore-auto-dns values to a file. Restore writes those values back and deletes the file only after every device restored. An existing backup is never overwritten, because a second capture would save the enforced values as the originals. Spike: ~/.config/work-dns/dns-backup.json, mode 0600. Production must use a root-owned path.
 4. Device: detect the active devices with nmcli at run time. Never hard-code wlp58s0.
 5. Crash safety: restore must not depend on the agent staying alive. The systemd unit runs the restore in ExecStopPost, which systemd runs after a crash or kill.
 6. Port 53: the unit grants AmbientCapabilities=CAP_NET_BIND_SERVICE. The agent does not run as root.
@@ -36,8 +36,14 @@ Observed on the Phase 0 laptop (Arch, wifi connection "Airtel_X25A_4650", device
 ## Open questions (untested)
 
 - Does a wifi reconnect or roam drop the runtime settings? Assumed yes, not verified.
-- Does the stub accept queries on ::1, or only on IPv4 127.0.0.1? Not checked.
+- Can the stub listen on ::1, so IPv6 DNS can point at it instead of being cleared? Not checked.
 - Does `nmcli connection up` also undo a modify? Not tested.
 - Behavior with several active devices (ethernet plus wifi), VPN clients, and captive portals.
 - Whether ExecStopPost runs reliably on SIGKILL and on out-of-memory kills. Test it.
 - Applications that do their own DoH (browsers) bypass system DNS. Out of scope here.
+
+## Implementation status
+
+- Implemented in LinuxPlatformAdapter (setDnsLoopback, restoreDns) with mock-based tests. Parsing was checked against real nmcli output on the Phase 0 laptop.
+- Not done: no caller invokes restoreDns on exit or crash, and the systemd unit with ExecStopPost does not exist.
+- Not done: no live run of enforcement against the real network.
