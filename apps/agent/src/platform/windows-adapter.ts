@@ -1,32 +1,33 @@
 import { PlatformAdapter, NotificationOptions } from './adapter.js';
 
+const NOT_IMPLEMENTED =
+  'WindowsPlatformAdapter is not implemented yet: no Windows DNS enforcement, notifications or secret protection exist (see docs/adr/0007)';
+
 /**
- * WindowsPlatformAdapter isolates all Windows-specific APIs (netsh, PowerShell, DPAPI).
- * Can be compiled on Linux without triggering OS-dependent native build failures.
+ * Placeholder for Windows-specific APIs (netsh or PowerShell for DNS, DPAPI for secrets).
+ * Every method fails loudly so the agent can never believe it is enforcing or protecting
+ * anything on Windows. Nothing here has been run on a real Windows machine.
  */
 export class WindowsPlatformAdapter implements PlatformAdapter {
   public readonly platformName = 'windows';
-  private inMemorySecrets = new Map<string, string>();
 
   public async setDnsLoopback(_port: number): Promise<void> {
-    // Windows implementation will invoke PowerShell netsh cmdlets to set loopback adapter DNS
+    throw new Error(NOT_IMPLEMENTED);
   }
 
   public async restoreDns(): Promise<void> {
-    // Windows implementation will invoke netsh to restore DHCP DNS
+    throw new Error(NOT_IMPLEMENTED);
   }
 
   public async showNotification(_options: NotificationOptions): Promise<void> {
-    // Windows implementation will invoke BurntToast or Windows WinRT Toast notification API
+    throw new Error(NOT_IMPLEMENTED);
   }
 
-  public async secureStore(key: string, secret: string): Promise<void> {
-    // Windows implementation invokes DPAPI CryptProtectData
-    this.inMemorySecrets.set(key, secret);
+  public async secureStore(_key: string, _secret: string): Promise<void> {
+    throw new Error(NOT_IMPLEMENTED);
   }
 
-  public async secureRetrieve(key: string): Promise<string | null> {
-    // Windows implementation invokes DPAPI CryptUnprotectData
-    return this.inMemorySecrets.get(key) ?? null;
+  public async secureRetrieve(_key: string): Promise<string | null> {
+    throw new Error(NOT_IMPLEMENTED);
   }
 }
