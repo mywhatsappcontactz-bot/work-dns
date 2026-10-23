@@ -35,7 +35,8 @@ Observed on the Phase 0 laptop (Arch, wifi connection "Airtel_X25A_4650", device
 
 ## Open questions (untested)
 
-- Does a wifi reconnect or roam drop the runtime settings? Assumed yes, not verified.
+- Does a roam or sleep/wake also drop the runtime settings? A manual reconnect did (see Findings). Other kinds are untested.
+- Can a firewall rule (block outbound port 53 except from the stub) close the leak window during reconnects? Not tried.
 - Can the stub listen on ::1, so IPv6 DNS can point at it instead of being cleared? Not checked.
 - Does `nmcli connection up` also undo a modify? Not tested.
 - Behavior with several active devices (ethernet plus wifi), VPN clients, and captive portals.
@@ -47,3 +48,8 @@ Observed on the Phase 0 laptop (Arch, wifi connection "Airtel_X25A_4650", device
 - Implemented in LinuxPlatformAdapter (setDnsLoopback, restoreDns) with mock-based tests. Parsing was checked against real nmcli output on the Phase 0 laptop.
 - Not done: no caller invokes restoreDns on exit or crash, and the systemd unit with ExecStopPost does not exist.
 - Not done: no live run of enforcement against the real network.
+
+## Findings
+
+- 2026-10-23, scripts/reconnect-test.mjs: `nmcli connection up` on the enforced device cleared the runtime DNS settings. resolv.conf had no nameservers at +0.3 s and the router's resolvers at +1.3 s, and facebook.com then resolved through the router. Enforcement is silently lost on reconnect.
+- Decision: the agent must detect the reset and re-apply enforcement, using `nmcli monitor` events plus a periodic check. setDnsLoopback already reuses an existing backup, so re-applying is safe.
