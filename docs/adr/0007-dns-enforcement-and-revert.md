@@ -53,3 +53,6 @@ Observed on the Phase 0 laptop (Arch, wifi connection "Airtel_X25A_4650", device
 
 - 2026-10-23, scripts/reconnect-test.mjs: `nmcli connection up` on the enforced device cleared the runtime DNS settings. resolv.conf had no nameservers at +0.3 s and the router's resolvers at +1.3 s, and facebook.com then resolved through the router. Enforcement is silently lost on reconnect.
 - Decision: the agent must detect the reset and re-apply enforcement, using `nmcli monitor` events plus a periodic check. setDnsLoopback already reuses an existing backup, so re-applying is safe.
+- 2026-10-23, scripts/reconnect-watch-test.mjs: with DnsDriftWatcher running (2 s timer plus nmcli monitor activity, 300 ms debounce), the same reconnect was re-enforced about 0.7 s after resolv.conf showed the router again. Total window 1.6 s: 0.9 s with no nameservers, then 0.7 s on the router's resolvers. One sample. facebook.com was blocked afterwards.
+- Known gap: the watcher cannot close this window. Closing it needs a firewall rule or a different mechanism, and neither is tried.
+- Untested: sleep/wake, roaming between access points, a second device appearing during a run, and the watcher inside a real agent process.
