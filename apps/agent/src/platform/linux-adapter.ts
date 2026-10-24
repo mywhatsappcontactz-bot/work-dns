@@ -31,6 +31,14 @@ function unescapeNmcli(value: string): string {
   return trimmed === '--' ? '' : trimmed.replace(/\\(.)/g, '$1');
 }
 
+/** Splits an nmcli '-g' list such as "192.168.1.1 | 114.114.114.114" into clean entries. */
+function splitServers(value: string): string[] {
+  return value
+    .split('|')
+    .map(unescapeNmcli)
+    .filter((entry) => entry !== '');
+}
+
 /** The original runtime DNS settings of one device, saved before enforcement. */
 interface DnsBackupEntry {
   device: string;
@@ -150,6 +158,35 @@ export class LinuxPlatformAdapter implements PlatformAdapter {
       throw new Error(`restoreDns failed (backup kept at ${this.backupFile}): ${failures.join('; ')}`);
     }
     fs.rmSync(this.backupFile, { force: true });
+  }
+
+  /** True when every connected wifi/ethernet device resolves only through the local stub. Reads live state. */
+  public async isDnsEnforced(): Promise<boolean> {
+    const devices = await this.activeDevices();
+    if (devices.length === 0) return false;
+    for (const device of devices) {
+      const out = await this.runCommand('nmcli', ['-t', '-g', 'IP4.DNS,IP6.DNS', 'device', 'show', device]);
+      const [v4 = '', v6 = ''] = out.replace(/\n$/, '').split('\n');
+      const v4Servers = splitServers(v4);
+      const v6Servers = splitServers(v6);
+      if (v4Servers.length !== 1 || v4Servers[0] !== '127.0.0.1' || v6Servers.length !== 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Re-applies enforcement when NetworkManager reset it (wifi reconnect) or a new device appeared.
+   * Does nothing unless enforcement was started earlier (a backup exists). Does not throw while no
+   * device is connected. A thrown error means re-applying failed and the device may be unenforced.
+   */
+  public async reapplyIfDrifted(port: number): Promise<'inactive' | 'no-device' | 'ok' | 'reapplied'> {
+    if (this.readBackup() === null) return 'inactive';
+    if ((await this.activeDevices()).length === 0) return 'no-device';
+    if (await this.isDnsEnforced()) return 'ok';
+    await this.setDnsLoopback(port);
+    return 'reapplied';
   }
 
   private async activeDevices(): Promise<string[]> {

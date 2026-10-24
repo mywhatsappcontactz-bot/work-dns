@@ -169,6 +169,11 @@ function makeFakeNmcli(devices: FakeDevice[], failWhen?: (args: string[]) => boo
         if (args.includes('status')) {
             return devices.map((d) => `${d.device}:${d.type}:${d.state}`).join('\n') + '\n';
         }
+        if (args.includes('IP4.DNS,IP6.DNS')) {
+            const state = runtime.get(args[args.length - 1]!) ?? { ipv4Dns: '', ipv4Ignore: 'no', ipv6Dns: '', ipv6Ignore: 'no' };
+            const v4 = state.ipv4Dns === '' ? '192.168.1.1 | 114.114.114.114' : state.ipv4Dns;
+            return `${v4}\n${state.ipv6Dns}\n`;
+        }
         if (args.includes('GENERAL.CONNECTION')) {
             const name = args[args.length - 1];
             const dev = devices.find((d) => d.device === name);
@@ -183,7 +188,9 @@ function makeFakeNmcli(devices: FakeDevice[], failWhen?: (args: string[]) => boo
         }
         throw new Error(`unexpected nmcli args: ${args.join(' ')}`);
     };
-    return { run, calls, runtime };
+    const reset = (device: string) =>
+        runtime.set(device, { ipv4Dns: '', ipv4Ignore: 'no', ipv6Dns: '', ipv6Ignore: 'no' });
+    return { run, calls, runtime, reset };
 }
 
 const WIFI: FakeDevice = { device: 'wlan0', type: 'wifi', state: 'connected', connection: 'HomeNet' };
@@ -298,5 +305,88 @@ describe('LinuxPlatformAdapter DNS enforcement', () => {
         const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
         await expect(adapter.setDnsLoopback(53)).rejects.toThrow(/no connected/);
         expect(fs.existsSync(backupFile)).toBe(false);
+    });
+});
+
+describe('LinuxPlatformAdapter drift detection', () => {
+    let dir: string;
+
+    beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-drift-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    const modifies = (calls: string[][]) => calls.filter((c) => c[1] === 'device' && c[2] === 'modify');
+    const captures = (calls: string[][]) => calls.filter((c) => c.includes('connection') && c.includes('show'));
+
+    it('isDnsEnforced is false before enforcement, true after, and false after a reconnect reset', async () => {
+        const fake = makeFakeNmcli([WIFI]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        expect(await adapter.isDnsEnforced()).toBe(false);
+        await adapter.setDnsLoopback(53);
+        expect(await adapter.isDnsEnforced()).toBe(true);
+        fake.reset('wlan0');
+        expect(await adapter.isDnsEnforced()).toBe(false);
+    });
+
+    it('isDnsEnforced needs every connected device to be enforced', async () => {
+        const fake = makeFakeNmcli([WIFI, ETH]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        expect(await adapter.isDnsEnforced()).toBe(true);
+        fake.reset('eth0');
+        expect(await adapter.isDnsEnforced()).toBe(false);
+    });
+
+    it('reapplyIfDrifted does nothing when enforcement was never started', async () => {
+        const fake = makeFakeNmcli([WIFI]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        expect(await adapter.reapplyIfDrifted(53)).toBe('inactive');
+        expect(fake.calls).toHaveLength(0);
+    });
+
+    it('reapplyIfDrifted reports ok and changes nothing while enforcement holds', async () => {
+        const fake = makeFakeNmcli([WIFI]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        const before = modifies(fake.calls).length;
+        expect(await adapter.reapplyIfDrifted(53)).toBe('ok');
+        expect(modifies(fake.calls)).toHaveLength(before);
+    });
+
+    it('reapplyIfDrifted re-enforces after a reconnect reset without re-capturing the backup', async () => {
+        const fake = makeFakeNmcli([WIFI]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        fake.reset('wlan0');
+        expect(await adapter.reapplyIfDrifted(53)).toBe('reapplied');
+        expect(await adapter.isDnsEnforced()).toBe(true);
+        expect(captures(fake.calls)).toHaveLength(1);
+    });
+
+    it('reapplyIfDrifted waits quietly while no device is connected', async () => {
+        const wifi: FakeDevice = { ...WIFI };
+        const fake = makeFakeNmcli([wifi]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        wifi.state = 'disconnected';
+        const before = modifies(fake.calls).length;
+        expect(await adapter.reapplyIfDrifted(53)).toBe('no-device');
+        expect(modifies(fake.calls)).toHaveLength(before);
+    });
+
+    it('reapplyIfDrifted enforces and backs up a device that appears later', async () => {
+        const devices: FakeDevice[] = [WIFI];
+        const fake = makeFakeNmcli(devices);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        devices.push(ETH);
+        expect(await adapter.reapplyIfDrifted(53)).toBe('reapplied');
+        expect(fake.runtime.get('eth0')?.ipv4Dns).toBe('127.0.0.1');
+        const saved = JSON.parse(fs.readFileSync(path.join(dir, 'dns-backup.json'), 'utf8')) as Array<{ device: string }>;
+        expect(saved.map((e) => e.device).sort()).toEqual(['eth0', 'wlan0']);
     });
 });
