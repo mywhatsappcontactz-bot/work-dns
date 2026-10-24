@@ -4,3 +4,4 @@ export * from './platform/windows-adapter.js';
 export * from './platform/mock-adapter.js';
 export * from './local-queue.js';
 export * from './dns-stub.js';
+export * from './dns-watcher.js';
