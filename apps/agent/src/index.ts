@@ -5,3 +5,5 @@ export * from './platform/mock-adapter.js';
 export * from './local-queue.js';
 export * from './dns-stub.js';
 export * from './dns-watcher.js';
+export * from './config.js';
+export * from './main.js';
