@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
-    "start": "node ./dist/bin.js"
+    "start": "node ./dist/bin.js",
+    "restore": "node ./dist/restore-bin.js"
   },
   "dependencies": {
     "@work-dns/shared-types": "*",

@@ -7,3 +7,4 @@ export * from './dns-stub.js';
 export * from './dns-watcher.js';
 export * from './config.js';
 export * from './main.js';
+export * from './restore.js';
