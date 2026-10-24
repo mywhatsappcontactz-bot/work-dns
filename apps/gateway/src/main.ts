@@ -1,7 +1,9 @@
+import { SqliteEventStore } from '@work-dns/events';
 import { PolicyEngine } from '@work-dns/policy-engine';
 import { DeviceAuthenticator } from './auth.js';
 import { loadConfig } from './config.js';
 import { DnsHandler } from './dns-handler.js';
+import { createAuditSink } from './audit-sink.js';
 import { GatewayEventQueue } from './event-queue.js';
 import { loadPolicies, loadTokenRecords } from './loaders.js';
 import { DohServer } from './server.js';
@@ -46,7 +48,8 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
     ...(deps.fetchImpl !== undefined ? { fetchImpl: deps.fetchImpl } : {}),
   };
 
-  const eventQueue = new GatewayEventQueue();
+  const auditStore = config.auditDb === undefined ? undefined : new SqliteEventStore(config.auditDb);
+  const eventQueue = new GatewayEventQueue(auditStore === undefined ? {} : { sink: createAuditSink(auditStore) });
   const handler = new DnsHandler({
     policyEngine: new PolicyEngine(),
     upstreamResolver: new UpstreamResolver(upstreamConfig),
@@ -75,6 +78,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
     });
   } catch (err) {
     await eventQueue.stop();
+    auditStore?.close();
     throw err;
   }
 
@@ -82,6 +86,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
   if (port === null) {
     await server.stop();
     await eventQueue.stop();
+    auditStore?.close();
     throw new Error('Gateway started but could not determine its listening port');
   }
 
@@ -91,6 +96,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
     trustProxy: config.trustProxy,
     devices: tokenRecords.length,
     policies: policies.length,
+    auditLog: auditStore !== undefined,
   });
 
   let stopping: Promise<void> | null = null;
@@ -101,6 +107,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
         stopping = (async (): Promise<void> => {
           await server.stop();
           await eventQueue.stop();
+          auditStore?.close();
           log('info', 'gateway stopped');
         })();
       }

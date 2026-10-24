@@ -25,6 +25,8 @@ export interface AuditEventStore {
   readAll(companyId: CompanyId): EventEnvelope[];
   head(companyId: CompanyId): { sequenceNumber: number; hash: string } | null;
   verify(companyId: CompanyId, options?: StoreVerifyOptions): ChainVerificationResult;
+  /** True when an event with this id is already stored. Makes retried batches safe. */
+  hasEvent(id: string): boolean;
 }
 
 export interface SqliteEventStoreOptions {
@@ -99,6 +101,7 @@ export class SqliteEventStore implements AuditEventStore {
   private readonly lastStmt: StatementSync;
   private readonly insertStmt: StatementSync;
   private readonly allStmt: StatementSync;
+  private readonly hasStmt: StatementSync;
 
   constructor(filePath: string, options: SqliteEventStoreOptions = {}) {
     this.now = options.now ?? (() => new Date());
@@ -115,6 +118,7 @@ export class SqliteEventStore implements AuditEventStore {
       'INSERT INTO events (company_id, sequence_number, id, type, schema_version, device_id, occurred_at, payload, prev_hash, hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
     this.allStmt = this.db.prepare('SELECT * FROM events WHERE company_id = ? ORDER BY sequence_number ASC');
+    this.hasStmt = this.db.prepare('SELECT 1 AS present FROM events WHERE id = ? LIMIT 1');
   }
 
   public append<T extends object>(input: AppendEventInput<T>): EventEnvelope<T> {
@@ -167,6 +171,10 @@ export class SqliteEventStore implements AuditEventStore {
 
   public verify(companyId: CompanyId, options: StoreVerifyOptions = {}): ChainVerificationResult {
     return verifyEventChain(this.readAll(companyId), { expectedCompanyId: companyId, ...options });
+  }
+
+  public hasEvent(id: string): boolean {
+    return this.hasStmt.get(id) !== undefined;
   }
 
   public close(): void {

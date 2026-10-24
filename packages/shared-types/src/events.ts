@@ -54,6 +54,8 @@ export interface DnsBlockedPayload {
   enforcementState?: 'enforced' | 'fail_open' | 'unknown';
   /** How many identical attempts were merged into this event. */
   count?: number;
+  /** When the gateway first saw the attempt. occurredAt is when the event was written. */
+  firstSeenAt?: string;
 }
 
 export interface DeviceEnrolledPayload {
