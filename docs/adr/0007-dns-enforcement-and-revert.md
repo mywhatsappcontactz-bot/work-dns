@@ -46,8 +46,8 @@ Observed on the Phase 0 laptop (Arch, wifi connection "Airtel_X25A_4650", device
 ## Implementation status
 
 - Implemented in LinuxPlatformAdapter (setDnsLoopback, restoreDns) with mock-based tests. Parsing was checked against real nmcli output on the Phase 0 laptop.
-- Not done: no caller invokes restoreDns on exit or crash, and the systemd unit with ExecStopPost does not exist.
-- Not done: no live run of enforcement against the real network.
+- Done since: apps/agent/src/main.ts restores DNS on exit, `npm run restore -w @work-dns/agent` restores it on its own, and deploy/systemd/work-dns-agent.service runs that restore in ExecStopPost.
+- Done since: enforcement ran live on the Phase 0 laptop from scripts, from the agent process and from the systemd service.
 
 ## Findings
 
@@ -56,3 +56,14 @@ Observed on the Phase 0 laptop (Arch, wifi connection "Airtel_X25A_4650", device
 - 2026-10-23, scripts/reconnect-watch-test.mjs: with DnsDriftWatcher running (2 s timer plus nmcli monitor activity, 300 ms debounce), the same reconnect was re-enforced about 0.7 s after resolv.conf showed the router again. Total window 1.6 s: 0.9 s with no nameservers, then 0.7 s on the router's resolvers. One sample. facebook.com was blocked afterwards.
 - Known gap: the watcher cannot close this window. Closing it needs a firewall rule or a different mechanism, and neither is tried.
 - Untested: sleep/wake, roaming between access points, a second device appearing during a run, and the watcher inside a real agent process.
+
+## Deployment findings (2026-10-24)
+
+- Under systemd-run, polkit refused `nmcli device modify` for the normal user ("not authorized") and allowed root. A system user `work-dns` plus /etc/polkit-1/rules.d/50-work-dns.rules (granting org.freedesktop.NetworkManager.network-control to that user) also worked. The agent therefore runs as `work-dns`, not root.
+- The rule's scope is broad: network-control covers any NetworkManager setting, not only DNS. Narrowing it (for example to the service's cgroup) is untested.
+- The unit limits the agent to CAP_NET_BIND_SERVICE and sets NoNewPrivileges. It runs a root-owned copy of the build in /opt/work-dns, copied by hand. A deploy script is not written.
+- Started as a service, the agent enforced DNS (resolv.conf showed only 127.0.0.1, facebook.com blocked). After `kill -9` on the main process, ExecStopPost ran the restore, resolv.conf returned to the router's resolvers and lookups worked again, with no manual step.
+- Restart=no is deliberate: an automatic restart would re-enforce DNS and hide whether the restore ran. Enable it once that no longer matters for testing.
+- The journal showed notify-send failing under the service (no desktop session). Staff see no block notices until a helper runs inside the user session.
+- The journal also showed cloudflare-dns.com blocked by company policy. Suspected cause: the gateway's own upstream lookups go through the enforced resolver when the gateway runs on the same machine. Not confirmed. An IP-based upstream (https://1.0.0.1/dns-query) would avoid it.
+- Audit log: the gateway can persist blocked attempts to a local SQLite store (GATEWAY_AUDIT_DB), and a live run produced a verifying chain. This is a single-gateway stand-in: the production design is a backend that assigns sequence numbers and hashes (docs/api-tasks.md). Signed checkpoints exist in code but nothing signs them yet, the signing key has no custody plan, loggedOsUser is still "unknown", and agent system events are not yet emitted.

@@ -1,0 +1,25 @@
+[Unit]
+Description=Work DNS agent (spike)
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=work-dns
+Group=work-dns
+Environment=HOME=/var/lib/work-dns
+Environment=AGENT_GATEWAY_URL=http://127.0.0.1:8053/dns-query
+Environment=AGENT_DEVICE_TOKEN_FILE=/etc/work-dns/device-token
+Environment=AGENT_QUEUE_FILE=/var/lib/work-dns/queue.json
+StateDirectory=work-dns
+StateDirectoryMode=0700
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+ExecStart=/usr/bin/node /opt/work-dns/apps/agent/dist/bin.js
+ExecStopPost=/usr/bin/node /opt/work-dns/apps/agent/dist/restore-bin.js
+Restart=no
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
