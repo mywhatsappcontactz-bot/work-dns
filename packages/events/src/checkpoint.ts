@@ -47,6 +47,11 @@ function keyIdOf(publicKey: KeyObject): string {
   return createHash('sha256').update(der).digest('hex').slice(0, 16);
 }
 
+/** The id a checkpoint carries for a public key: the first 16 hex characters of the SHA-256 of its DER encoding. */
+export function publicKeyIdOf(publicKeyPem: string): string {
+  return keyIdOf(createPublicKey(publicKeyPem));
+}
+
 /** Ed25519 signer. In production the private key must live outside the log writer's reach (for example KMS). */
 export class Ed25519Signer implements CheckpointSigner {
   public readonly keyId: string;
