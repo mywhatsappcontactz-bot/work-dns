@@ -1,6 +1,8 @@
 import http from 'node:http';
 import { isIP } from 'node:net';
+import type { AgentEventIngest } from './agent-events.js';
 import { DeviceAuthenticator } from './auth.js';
+import type { AuthenticatedDeviceContext } from './auth.js';
 import { DnsHandler, MAX_DNS_PACKET_SIZE } from './dns-handler.js';
 import { IpRateLimiter } from './ip-rate-limiter.js';
 
@@ -24,6 +26,7 @@ const KEEP_ALIVE_TIMEOUT_MS = 5_000;
 const FORCE_CLOSE_AFTER_MS = 5_000;
 const MAX_FORWARDED_ADDRESS_LENGTH = 64;
 const AUTH_LOG_INTERVAL_MS = 1_000;
+const MAX_AGENT_EVENTS_BODY_BYTES = 65_536;
 
 class HttpError extends Error {
   readonly status: number;
@@ -51,14 +54,16 @@ export class DohServer {
   private server: http.Server | null = null;
   private readonly authenticator: DeviceAuthenticator;
   private readonly handler: DnsHandler;
+  private readonly agentEvents: AgentEventIngest | undefined;
   private ipLimiter: IpRateLimiter | null = null;
   private trustProxy = false;
   private lastAuthLogMs = 0;
   private suppressedAuthLogs = 0;
 
-  constructor(authenticator: DeviceAuthenticator, handler: DnsHandler) {
+  constructor(authenticator: DeviceAuthenticator, handler: DnsHandler, options: { agentEvents?: AgentEventIngest } = {}) {
     this.authenticator = authenticator;
     this.handler = handler;
+    this.agentEvents = options.agentEvents;
   }
 
   public start(config: DohServerConfig): Promise<void> {
@@ -231,6 +236,56 @@ export class DohServer {
     });
   }
 
+  /** Device-reported audit events. Identity comes from the token, never from the request body. */
+  private async handleAgentEvents(req: http.IncomingMessage, res: http.ServerResponse, clientIp: string): Promise<void> {
+    const authResult = this.authenticator.authenticateHeader(req.headers['authorization']);
+    if (!authResult.authenticated || !authResult.context) {
+      if (authResult.errorStatus === 429) {
+        this.sendJson(res, 429, { error: 'Too Many Requests' }, { 'Retry-After': '1' });
+        return;
+      }
+      this.logAuthFailure(clientIp, authResult.errorStatus, authResult.errorMessage);
+      this.sendJson(res, 401, { error: 'Unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
+      return;
+    }
+    const context: AuthenticatedDeviceContext = authResult.context;
+
+    if (req.method !== 'POST') {
+      this.sendJson(res, 405, { error: 'Method Not Allowed' }, { Allow: 'POST' });
+      return;
+    }
+    const ingest = this.agentEvents;
+    if (ingest === undefined) {
+      this.sendJson(res, 503, { error: 'Audit log is not enabled on this gateway' });
+      return;
+    }
+    const mediaType = (req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+    if (mediaType !== 'application/json') {
+      this.sendJson(res, 415, { error: 'Unsupported Media Type: expected application/json' });
+      return;
+    }
+
+    const raw = await this.readBody(req, MAX_AGENT_EVENTS_BODY_BYTES);
+    let body: unknown;
+    try {
+      body = JSON.parse(raw.toString('utf8'));
+    } catch {
+      this.sendJson(res, 400, { error: 'Invalid JSON' });
+      return;
+    }
+
+    const outcome = ingest(context, body);
+    if (!outcome.ok) {
+      this.sendJson(res, 400, {
+        error: 'Invalid event batch',
+        detail: outcome.error,
+        ...(outcome.index !== undefined ? { index: outcome.index } : {}),
+      });
+      return;
+    }
+    this.sendJson(res, 200, { accepted: outcome.accepted, duplicates: outcome.duplicates });
+  }
+
   private async handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const rawUrl = req.url ?? '/';
     if (!rawUrl.startsWith('/') || rawUrl.startsWith('//')) {
@@ -255,6 +310,11 @@ export class DohServer {
         return;
       }
       this.sendJson(res, 200, { status: 'ok' });
+      return;
+    }
+
+    if (pathname === '/api/v1/agent-events') {
+      await this.handleAgentEvents(req, res, clientIp);
       return;
     }
 

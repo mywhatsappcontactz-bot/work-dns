@@ -3,6 +3,7 @@ import { PolicyEngine } from '@work-dns/policy-engine';
 import { DeviceAuthenticator } from './auth.js';
 import { loadConfig } from './config.js';
 import { DnsHandler } from './dns-handler.js';
+import { createAgentEventIngest } from './agent-events.js';
 import { createAuditSink } from './audit-sink.js';
 import { GatewayEventQueue } from './event-queue.js';
 import { loadPolicies, loadTokenRecords } from './loaders.js';
@@ -68,7 +69,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
   }
 
   eventQueue.start();
-  const server = new DohServer(authenticator, handler);
+  const server = new DohServer(authenticator, handler, auditStore === undefined ? {} : { agentEvents: createAgentEventIngest(auditStore) });
   try {
     await server.start({
       port: config.port,

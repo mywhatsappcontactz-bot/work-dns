@@ -22,7 +22,8 @@ export type EventType =
   | 'auth_rejected'
   | 'device_revoked'
   | 'dns_allowed_summary'
-  | 'retention_expired';
+  | 'retention_expired'
+  | 'offline_query';
 
 export interface EventEnvelope<T = Record<string, unknown>> {
   id: string;
@@ -161,4 +162,12 @@ export interface RetentionExpiredPayload {
   throughSequenceNumber: number;
   retentionDays: number;
   checkpointHash: string;
+}
+
+/** A query the device answered while the gateway was unreachable, reported after the outage. */
+export interface OfflineQueryPayload {
+  domain: string;
+  action: 'FAIL_OPEN_ALLOWED' | 'OFFLINE_BLOCKED' | 'AUTH_REJECTED';
+  reason: string;
+  occurrences: number;
 }
