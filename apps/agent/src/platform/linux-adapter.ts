@@ -189,6 +189,26 @@ export class LinuxPlatformAdapter implements PlatformAdapter {
     return 'reapplied';
   }
 
+  /**
+   * Names of the network devices this agent currently holds enforcement on, read from the saved backup.
+   * Empty when nothing is enforced. Call it BEFORE restoreDns(), which deletes the backup after a
+   * successful restore. Never throws: an unreadable backup is logged and reported as empty.
+   */
+  public enforcedDevices(): string[] {
+    try {
+      return (this.readBackup() ?? []).map((entry) => entry.device);
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          message: 'could not read the DNS backup to list enforced devices',
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+      return [];
+    }
+  }
+
   private async activeDevices(): Promise<string[]> {
     const out = await this.runCommand('nmcli', ['-t', '-f', 'DEVICE,TYPE,STATE', 'device', 'status']);
     const devices: string[] = [];

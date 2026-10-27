@@ -390,3 +390,70 @@ describe('LinuxPlatformAdapter drift detection', () => {
         expect(saved.map((e) => e.device).sort()).toEqual(['eth0', 'wlan0']);
     });
 });
+
+describe('LinuxPlatformAdapter enforcedDevices', () => {
+    let dir: string;
+
+    beforeEach(() => {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wd-devices-'));
+    });
+
+    afterEach(() => {
+        fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('is empty before enforcement', () => {
+        const fake = makeFakeNmcli([WIFI]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        expect(adapter.enforcedDevices()).toEqual([]);
+    });
+
+    it('lists every enforced device in order', async () => {
+        const fake = makeFakeNmcli([WIFI, ETH]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        expect(adapter.enforcedDevices()).toEqual(['wlan0', 'eth0']);
+    });
+
+    it('is empty again after a successful restore, so callers must read it before restoring', async () => {
+        const fake = makeFakeNmcli([WIFI]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        expect(adapter.enforcedDevices()).toEqual(['wlan0']);
+        await adapter.restoreDns();
+        expect(adapter.enforcedDevices()).toEqual([]);
+    });
+
+    it('still lists the devices when a restore fails, because the backup is kept', async () => {
+        let failing = false;
+        const fake = makeFakeNmcli([WIFI], (args) => failing && args[1] === 'modify');
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        failing = true;
+        await expect(adapter.restoreDns()).rejects.toThrow(/restoreDns failed/);
+        expect(adapter.enforcedDevices()).toEqual(['wlan0']);
+    });
+
+    it('includes a device that appeared later and was enforced by a re-apply', async () => {
+        const devices: FakeDevice[] = [WIFI];
+        const fake = makeFakeNmcli(devices);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        await adapter.setDnsLoopback(53);
+        devices.push(ETH);
+        expect(await adapter.reapplyIfDrifted(53)).toBe('reapplied');
+        expect(adapter.enforcedDevices()).toEqual(['wlan0', 'eth0']);
+    });
+
+    it('reports an unreadable backup as empty and logs an error instead of throwing', () => {
+        fs.writeFileSync(path.join(dir, 'dns-backup.json'), 'not json', { mode: 0o600 });
+        const fake = makeFakeNmcli([WIFI]);
+        const adapter = new LinuxPlatformAdapter({ configDir: dir, runCommand: fake.run });
+        const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            expect(adapter.enforcedDevices()).toEqual([]);
+            expect(spy).toHaveBeenCalledTimes(1);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+});
