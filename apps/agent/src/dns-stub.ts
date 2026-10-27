@@ -25,6 +25,8 @@ export interface DnsStubConfig {
   requestAccessUrl?: string;
   /** Delivers queued offline events when the gateway comes back. Without it they stay queued locally. */
   eventSink?: (events: QueuedOfflineEvent[]) => Promise<void>;
+  /** Called when the gateway state changes. A throwing callback is logged and ignored. */
+  onStateChange?: (change: GatewayStateChange) => void;
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
   /** Clock in epoch milliseconds (injectable for tests). */
@@ -32,6 +34,16 @@ export interface DnsStubConfig {
 }
 
 export type GatewayState = 'ONLINE' | 'FAIL_OPEN_ACTIVE' | 'FAIL_CLOSED';
+
+/** One change of the stub's gateway state, for audit reporting. */
+export interface GatewayStateChange {
+  from: GatewayState;
+  to: GatewayState;
+  /** ISO 8601 UTC time of the change. */
+  at: string;
+  /** Set when the gateway recovered: how long the outage lasted. */
+  outageSeconds?: number;
+}
 
 type FailureKind = 'unreachable' | 'auth' | 'rejected' | 'bad_response';
 
@@ -114,6 +126,7 @@ export class DnsStubServer {
   private readonly notificationCooldownMs: number;
   private readonly requestAccessUrl: string | undefined;
   private readonly eventSink: ((events: QueuedOfflineEvent[]) => Promise<void>) | undefined;
+  private readonly onStateChange: ((change: GatewayStateChange) => void) | undefined;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly now: () => number;
 
@@ -155,6 +168,7 @@ export class DnsStubServer {
     this.notificationCooldownMs = config.notificationCooldownMs ?? DEFAULT_NOTIFICATION_COOLDOWN_MS;
     this.requestAccessUrl = config.requestAccessUrl;
     this.eventSink = config.eventSink;
+    this.onStateChange = config.onStateChange;
     this.fetchImpl = config.fetchImpl;
     this.now = config.now ?? Date.now;
   }
@@ -333,6 +347,23 @@ export class DnsStubServer {
     }
   }
 
+  private emitStateChange(from: GatewayState, to: GatewayState, outageStartMs: number | null): void {
+    const callback = this.onStateChange;
+    if (!callback) return;
+    const nowMs = this.now();
+    const change: GatewayStateChange = {
+      from,
+      to,
+      at: new Date(nowMs).toISOString(),
+      ...(to === 'ONLINE' && outageStartMs !== null ? { outageSeconds: Math.max(0, Math.round((nowMs - outageStartMs) / 1000)) } : {}),
+    };
+    try {
+      callback(change);
+    } catch (err) {
+      logError('state change callback failed', { error: errorMessageOf(err) });
+    }
+  }
+
   /** Only network errors, timeouts and 5xx responses reach this path. */
   private async handleGatewayUnreachable(
     queryBuffer: Buffer,
@@ -346,6 +377,7 @@ export class DnsStubServer {
     if (this.state === 'ONLINE') {
       this.state = 'FAIL_OPEN_ACTIVE';
       this.failOpenStartMs = nowMs;
+      this.emitStateChange('ONLINE', 'FAIL_OPEN_ACTIVE', null);
       this.notify('gateway-offline', {
         title: 'Work DNS — Gateway offline',
         message: 'Filtering is temporarily unavailable. Browsing continues for a limited time and attempts are recorded.',
@@ -355,7 +387,9 @@ export class DnsStubServer {
     const elapsed = nowMs - (this.failOpenStartMs ?? nowMs);
     if (elapsed > this.failOpenMaxMs) {
       if (this.state !== 'FAIL_CLOSED') {
+        const previous = this.state;
         this.state = 'FAIL_CLOSED';
+        this.emitStateChange(previous, 'FAIL_CLOSED', null);
         logError('fail-open time limit exceeded: blocking all DNS until the gateway returns');
         this.notify('gateway-closed', {
           title: 'Work DNS — Browsing paused',
@@ -384,8 +418,11 @@ export class DnsStubServer {
   }
 
   private recoverFromOutage(): void {
+    const previous = this.state;
+    const outageStartMs = this.failOpenStartMs;
     this.state = 'ONLINE';
     this.failOpenStartMs = null;
+    this.emitStateChange(previous, 'ONLINE', outageStartMs);
     this.notify('gateway-restored', {
       title: 'Work DNS — Connection restored',
       message: 'The DNS gateway is reachable again and filtering is active.',
