@@ -10,3 +10,4 @@ export * from './main.js';
 export * from './restore.js';
 export * from './outbox.js';
 export * from './event-sender.js';
+export * from './audit-reporter.js';
