@@ -2,7 +2,7 @@ import type { AuditEventStore } from '@work-dns/events';
 import type { DnsBlockedPayload } from '@work-dns/shared-types';
 import type { BlockedAttemptRecord, BlockedAttemptSink } from './event-queue.js';
 
-function toPayload(record: BlockedAttemptRecord): DnsBlockedPayload {
+export function toPayload(record: BlockedAttemptRecord): DnsBlockedPayload {
   return {
     domain: record.domain,
     loggedOsUser: record.loggedOsUser,
@@ -11,6 +11,7 @@ function toPayload(record: BlockedAttemptRecord): DnsBlockedPayload {
     firstSeenAt: record.occurredAt,
     count: record.count,
     ...(record.clientIp !== undefined ? { clientIp: record.clientIp } : {}),
+    ...(record.lastSeenAt !== undefined ? { lastSeenAt: record.lastSeenAt } : {}),
   };
 }
 
