@@ -19,6 +19,8 @@ export interface BlockedAttemptRecord {
   occurredAt: string;
   /** Number of identical attempts coalesced into this record while it was queued. */
   count: number;
+  /** When the most recent attempt merged into this record happened. Unset until a second attempt is merged. */
+  lastSeenAt?: string;
 }
 
 export type BlockedAttemptSink = (records: BlockedAttemptRecord[]) => Promise<void>;
@@ -96,6 +98,7 @@ export class GatewayEventQueue {
     const existing = this.pending.get(key);
     if (existing) {
       existing.count += 1;
+      existing.lastSeenAt = new Date().toISOString();
       return;
     }
 

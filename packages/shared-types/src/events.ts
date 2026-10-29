@@ -57,6 +57,13 @@ export interface DnsBlockedPayload {
   count?: number;
   /** When the gateway first saw the attempt. occurredAt is when the event was written. */
   firstSeenAt?: string;
+  /** True on a rolled-up entry: repeats of an attempt already logged in full inside the same window. */
+  rollup?: boolean;
+  /** When the last attempt merged into this entry happened. */
+  lastSeenAt?: string;
+  /** For rollups: the window the repeats fall in. */
+  windowStart?: string;
+  windowEnd?: string;
 }
 
 export interface DeviceEnrolledPayload {
