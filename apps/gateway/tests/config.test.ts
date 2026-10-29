@@ -13,6 +13,7 @@ describe('loadConfig', () => {
       policiesFile: '/etc/work-dns/policies.json',
       upstreamPrimary: undefined,
       upstreamSecondary: undefined,
+      rollupWindowSeconds: 300,
       ipRateBurst: 1000,
       ipRatePerSecond: 500,
     });

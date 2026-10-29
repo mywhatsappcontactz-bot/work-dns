@@ -7,6 +7,7 @@ export interface GatewayConfig {
   upstreamPrimary: string | undefined;
   upstreamSecondary: string | undefined;
   auditDb: string | undefined;
+  rollupWindowSeconds: number;
   ipRateBurst: number;
   ipRatePerSecond: number;
 }
@@ -80,6 +81,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): GatewayConfig {
   checkHttpsUrl('GATEWAY_UPSTREAM_SECONDARY', upstreamSecondary, errors);
   const auditDb = readVar(env, 'GATEWAY_AUDIT_DB');
 
+  const rollupWindowSeconds = parseNumber(env, 'GATEWAY_ROLLUP_WINDOW_SECONDS', 1, 300, errors);
   const ipRateBurst = parseNumber(env, 'GATEWAY_IP_RATE_BURST', 1, 1000, errors);
   const ipRatePerSecond = parseNumber(env, 'GATEWAY_IP_RATE_PER_SECOND', 0, 500, errors);
 
@@ -96,6 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): GatewayConfig {
     upstreamPrimary,
     upstreamSecondary,
     auditDb,
+    rollupWindowSeconds,
     ipRateBurst,
     ipRatePerSecond,
   };
