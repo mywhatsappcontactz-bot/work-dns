@@ -23,7 +23,8 @@ export type EventType =
   | 'device_revoked'
   | 'dns_allowed_summary'
   | 'retention_expired'
-  | 'offline_query';
+  | 'offline_query'
+  | 'heartbeat_resumed';
 
 export interface EventEnvelope<T = Record<string, unknown>> {
   id: string;
@@ -177,4 +178,19 @@ export interface OfflineQueryPayload {
   action: 'FAIL_OPEN_ALLOWED' | 'OFFLINE_BLOCKED' | 'AUTH_REJECTED';
   reason: string;
   occurrences: number;
+}
+
+/** Written by the gateway when an active device has sent nothing for longer than the threshold. */
+export interface HeartbeatMissedPayload {
+  lastSeenAt: string;
+  thresholdSeconds: number;
+  detectedAt: string;
+}
+
+/** Written by the gateway when a device that was reported silent is heard from again. */
+export interface HeartbeatResumedPayload {
+  /** The last time the device was seen before the silence began. */
+  lastSeenAt: string;
+  resumedAt: string;
+  gapSeconds: number;
 }
