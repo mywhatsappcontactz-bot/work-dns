@@ -55,15 +55,21 @@ export class DohServer {
   private readonly authenticator: DeviceAuthenticator;
   private readonly handler: DnsHandler;
   private readonly agentEvents: AgentEventIngest | undefined;
+  private readonly onAuthenticated: ((context: AuthenticatedDeviceContext) => void) | undefined;
   private ipLimiter: IpRateLimiter | null = null;
   private trustProxy = false;
   private lastAuthLogMs = 0;
   private suppressedAuthLogs = 0;
 
-  constructor(authenticator: DeviceAuthenticator, handler: DnsHandler, options: { agentEvents?: AgentEventIngest } = {}) {
+  constructor(
+    authenticator: DeviceAuthenticator,
+    handler: DnsHandler,
+    options: { agentEvents?: AgentEventIngest; onAuthenticated?: (context: AuthenticatedDeviceContext) => void } = {}
+  ) {
     this.authenticator = authenticator;
     this.handler = handler;
     this.agentEvents = options.agentEvents;
+    this.onAuthenticated = options.onAuthenticated;
   }
 
   public start(config: DohServerConfig): Promise<void> {
@@ -236,6 +242,15 @@ export class DohServer {
     });
   }
 
+  /** Tells the hook that a device proved its identity. A failing hook must never break a request. */
+  private noteAuthenticated(context: AuthenticatedDeviceContext): void {
+    try {
+      this.onAuthenticated?.(context);
+    } catch (err) {
+      logLine('error', 'authenticated-request hook failed', { error: errorMessageOf(err) });
+    }
+  }
+
   /** Device-reported audit events. Identity comes from the token, never from the request body. */
   private async handleAgentEvents(req: http.IncomingMessage, res: http.ServerResponse, clientIp: string): Promise<void> {
     const authResult = this.authenticator.authenticateHeader(req.headers['authorization']);
@@ -249,6 +264,7 @@ export class DohServer {
       return;
     }
     const context: AuthenticatedDeviceContext = authResult.context;
+    this.noteAuthenticated(context);
 
     if (req.method !== 'POST') {
       this.sendJson(res, 405, { error: 'Method Not Allowed' }, { Allow: 'POST' });
@@ -334,6 +350,8 @@ export class DohServer {
       this.sendJson(res, 401, { error: 'Unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
       return;
     }
+
+    this.noteAuthenticated(authResult.context);
 
     // 2. Obtain the DNS message (RFC 8484 POST body or GET ?dns=base64url).
     let dnsMessage: Buffer;

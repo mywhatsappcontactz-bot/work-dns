@@ -1,11 +1,13 @@
 import { SqliteEventStore } from '@work-dns/events';
 import { PolicyEngine } from '@work-dns/policy-engine';
 import { DeviceAuthenticator } from './auth.js';
+import type { AuthenticatedDeviceContext } from './auth.js';
 import { loadConfig } from './config.js';
 import { DnsHandler } from './dns-handler.js';
 import { createAgentEventIngest } from './agent-events.js';
 import { createRollupAuditSink } from './audit-rollup.js';
 import { GatewayEventQueue } from './event-queue.js';
+import { HeartbeatWatcher } from './heartbeat-watcher.js';
 import { loadPolicies, loadTokenRecords } from './loaders.js';
 import { DohServer } from './server.js';
 import { UpstreamResolver, UpstreamResolverConfig } from './upstream.js';
@@ -52,6 +54,11 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
   const auditStore = config.auditDb === undefined ? undefined : new SqliteEventStore(config.auditDb);
   const rollup =
     auditStore === undefined ? undefined : createRollupAuditSink(auditStore, { windowMs: config.rollupWindowSeconds * 1000 });
+  const heartbeat =
+    auditStore === undefined
+      ? undefined
+      : new HeartbeatWatcher(auditStore, { thresholdMs: config.heartbeatThresholdSeconds * 1000 });
+  heartbeat?.seed(tokenRecords.map((record) => record.context));
   const eventQueue = new GatewayEventQueue(rollup === undefined ? {} : { sink: rollup.sink });
   const handler = new DnsHandler({
     policyEngine: new PolicyEngine(),
@@ -72,7 +79,11 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
 
   eventQueue.start();
   rollup?.start();
-  const server = new DohServer(authenticator, handler, auditStore === undefined ? {} : { agentEvents: createAgentEventIngest(auditStore) });
+  heartbeat?.start();
+  const server = new DohServer(authenticator, handler, {
+    ...(auditStore === undefined ? {} : { agentEvents: createAgentEventIngest(auditStore) }),
+    ...(heartbeat === undefined ? {} : { onAuthenticated: (context: AuthenticatedDeviceContext) => heartbeat.touch(context) }),
+  });
   try {
     await server.start({
       port: config.port,
@@ -82,6 +93,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
     });
   } catch (err) {
     await eventQueue.stop();
+    heartbeat?.stop();
     rollup?.stop();
     auditStore?.close();
     throw err;
@@ -91,6 +103,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
   if (port === null) {
     await server.stop();
     await eventQueue.stop();
+    heartbeat?.stop();
     rollup?.stop();
     auditStore?.close();
     throw new Error('Gateway started but could not determine its listening port');
@@ -103,6 +116,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
     devices: tokenRecords.length,
     policies: policies.length,
     auditLog: auditStore !== undefined,
+    heartbeatThresholdSeconds: heartbeat === undefined ? null : config.heartbeatThresholdSeconds,
   });
 
   let stopping: Promise<void> | null = null;
@@ -113,6 +127,7 @@ export async function startGateway(env: NodeJS.ProcessEnv, deps: GatewayDependen
         stopping = (async (): Promise<void> => {
           await server.stop();
           await eventQueue.stop();
+          heartbeat?.stop();
           rollup?.stop();
           auditStore?.close();
           log('info', 'gateway stopped');
