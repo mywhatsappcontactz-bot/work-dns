@@ -185,6 +185,8 @@ export interface HeartbeatMissedPayload {
   lastSeenAt: string;
   thresholdSeconds: number;
   detectedAt: string;
+  /** "request": a real request from the device. "gateway_start": the gateway had just started, so the device may have been silent longer than lastSeenAt suggests. */
+  lastSeenSource?: 'request' | 'gateway_start';
 }
 
 /** Written by the gateway when a device that was reported silent is heard from again. */
@@ -193,4 +195,6 @@ export interface HeartbeatResumedPayload {
   lastSeenAt: string;
   resumedAt: string;
   gapSeconds: number;
+  /** Where lastSeenAt came from; see HeartbeatMissedPayload. */
+  lastSeenSource?: 'request' | 'gateway_start';
 }

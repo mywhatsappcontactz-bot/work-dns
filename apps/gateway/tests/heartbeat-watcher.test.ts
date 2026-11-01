@@ -81,7 +81,12 @@ describe('HeartbeatWatcher', () => {
         const events = store.readAll(A);
         expect(events).toHaveLength(1);
         expect(events[0]).toMatchObject({ id: `hb-missed:comp-a:d1:${T0}`, type: 'heartbeat_missed', deviceId: 'd1' });
-        expect(events[0]!.payload).toEqual({ lastSeenAt: iso(T0), thresholdSeconds: 300, detectedAt: iso(T0 + 5 * MIN) });
+        expect(events[0]!.payload).toEqual({
+            lastSeenAt: iso(T0),
+            thresholdSeconds: 300,
+            detectedAt: iso(T0 + 5 * MIN),
+            lastSeenSource: 'gateway_start',
+        });
         expect(watcher.silentDevices()).toBe(1);
     });
 
@@ -120,7 +125,12 @@ describe('HeartbeatWatcher', () => {
         let events = store.readAll(A);
         expect(events.map((e) => e.type)).toEqual(['heartbeat_missed', 'heartbeat_resumed']);
         expect(events[1]!.id).toBe(`hb-resumed:comp-a:d1:${T0}`);
-        expect(events[1]!.payload).toEqual({ lastSeenAt: iso(T0), resumedAt: iso(T0 + 8 * MIN), gapSeconds: 480 });
+        expect(events[1]!.payload).toEqual({
+            lastSeenAt: iso(T0),
+            resumedAt: iso(T0 + 8 * MIN),
+            gapSeconds: 480,
+            lastSeenSource: 'gateway_start',
+        });
         expect(watcher.silentDevices()).toBe(0);
         nowMs = T0 + 14 * MIN;
         watcher.sweep();

@@ -22,9 +22,13 @@ interface TrackedDevice {
   companyId: CompanyId;
   deviceId: DeviceId;
   lastSeenMs: number;
+  /** Whether lastSeenMs came from a real request or from the gateway's own start. */
+  lastSeenFrom: 'request' | 'gateway_start';
   state: 'ok' | 'silent' | 'resuming';
   /** lastSeenMs at the moment the silence was reported. */
   outageStartMs: number;
+  /** Where outageStartMs came from. */
+  outageStartFrom: 'request' | 'gateway_start';
   /** When the device was first heard from again. */
   resumedAtMs: number;
 }
@@ -88,7 +92,7 @@ export class HeartbeatWatcher {
     const nowMs = this.now();
     for (const context of contexts) {
       if (context.status !== 'active') continue;
-      this.track(context, nowMs);
+      this.track(context, nowMs, 'gateway_start');
     }
   }
 
@@ -99,6 +103,7 @@ export class HeartbeatWatcher {
     const entry = this.track(context, nowMs);
     if (entry === undefined) return;
     entry.lastSeenMs = nowMs;
+    entry.lastSeenFrom = 'request';
     if (entry.state === 'silent') {
       entry.state = 'resuming';
       entry.resumedAtMs = nowMs;
@@ -147,7 +152,11 @@ export class HeartbeatWatcher {
     return count;
   }
 
-  private track(context: AuthenticatedDeviceContext, nowMs: number): TrackedDevice | undefined {
+  private track(
+    context: AuthenticatedDeviceContext,
+    nowMs: number,
+    from: 'request' | 'gateway_start' = 'request'
+  ): TrackedDevice | undefined {
     const key = keyOf(context);
     const existing = this.tracked.get(key);
     if (existing !== undefined) return existing;
@@ -162,8 +171,10 @@ export class HeartbeatWatcher {
       companyId: context.companyId,
       deviceId: context.deviceId,
       lastSeenMs: nowMs,
+      lastSeenFrom: from,
       state: 'ok',
       outageStartMs: 0,
+      outageStartFrom: from,
       resumedAtMs: 0,
     };
     this.tracked.set(key, entry);
@@ -176,6 +187,7 @@ export class HeartbeatWatcher {
       lastSeenAt: iso(entry.lastSeenMs),
       thresholdSeconds: Math.round(this.thresholdMs / 1000),
       detectedAt: iso(nowMs),
+      lastSeenSource: entry.lastSeenFrom,
     };
     try {
       if (!this.store.hasEvent(id)) {
@@ -183,6 +195,7 @@ export class HeartbeatWatcher {
       }
       entry.state = 'silent';
       entry.outageStartMs = entry.lastSeenMs;
+      entry.outageStartFrom = entry.lastSeenFrom;
     } catch (err) {
       this.log('error', 'could not record a missed heartbeat; will retry', { deviceId: entry.deviceId, error: errorMessageOf(err) });
     }
@@ -194,6 +207,7 @@ export class HeartbeatWatcher {
       lastSeenAt: iso(entry.outageStartMs),
       resumedAt: iso(entry.resumedAtMs),
       gapSeconds: Math.max(0, Math.round((entry.resumedAtMs - entry.outageStartMs) / 1000)),
+      lastSeenSource: entry.outageStartFrom,
     };
     try {
       if (!this.store.hasEvent(id)) {
