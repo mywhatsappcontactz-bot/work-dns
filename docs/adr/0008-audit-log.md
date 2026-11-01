@@ -2,6 +2,7 @@
 
 Status: Accepted for the local spike. The production design differs where noted.
 Date: 2026-10-30
+Updated: 2026-11-01 (heartbeat watcher; verification status corrected)
 
 ## Context
 
@@ -52,7 +53,7 @@ POST /api/v1/agent-events on the gateway.
 
 ### 6. Volume: roll-up of repeats
 
-- The first attempt at a domain is written at once. Repeats inside the window (default 300 s, GATEWAY_ROLLUP_WINDOW_SECONDS) become one entry with `rollup: true`, a count, the first and last repeat times and the window bounds.
+- The first attempt at a domain is written within the queue's 5 second flush (measured live: about 5 seconds). Repeats inside the window (default 300 s, GATEWAY_ROLLUP_WINDOW_SECONDS) become one entry with `rollup: true`, a count, the first and last repeat times and the window bounds.
 - A window is keyed by company, device, domain, reason, policy version and user. Its entry id is `rollup:` plus the first entry's id, so a retry cannot duplicate it.
 - A retried batch is not counted twice. A failed roll-up write keeps its counts and retries on the next sweep. Shutdown writes open windows. Beyond 10000 open windows, new attempts are written in full.
 - Limit: repeat counts held in memory are lost if the gateway crashes. The first sighting is already stored.
@@ -63,6 +64,15 @@ POST /api/v1/agent-events on the gateway.
 - Integrity has three states. VERIFIED: the chain and signed checkpoints are valid and nothing is newer than the last checkpoint. PARTIAL: nothing contradicts the log but something is unprotected, and the caveats say what. FAILED: tampering was detected.
 - Reports always list caveats, such as entries with no verified user. CSV export guards against spreadsheet formula injection. The CLI exits 0, 1 or 2 for the three states.
 
+### 8. Heartbeat watcher
+
+- The gateway records the time of every authenticated request (DNS queries and device events), per company and device. An active device that is silent for longer than the threshold (default 300 s, GATEWAY_HEARTBEAT_THRESHOLD_SECONDS) gets one heartbeat_missed entry per outage. When it is heard from again, one heartbeat_resumed entry records the gap.
+- Both entries are witnessed: the gateway observed the silence. Entry ids include company, device and outage start, so a retried write cannot duplicate them.
+- The hook runs only after a valid token check, so a request without a token cannot make a silent device look alive. A failing hook is logged and never affects the request.
+- At gateway start every active device counts as seen now, so a device that never returns is still reported one threshold later. Both payloads carry lastSeenSource ("request" or "gateway_start"), so a reader can tell a real last sighting from the gateway's own start time.
+- stop() writes nothing, so gateway downtime is never blamed on devices. Only active devices are tracked, capped at 10000. A failed write is logged and retried on the next sweep.
+- Limits are listed under "Not verified".
+
 ## Verified live (Phase 0 laptop)
 
 - Blocked attempts written by the running gateway into the store; the chain verified.
@@ -71,15 +81,17 @@ POST /api/v1/agent-events on the gateway.
 - A real agent against the real gateway produced agent_started, enforcement_applied, enforcement_reset (forced wifi reconnect), enforcement_restored and agent_stopped. The outbox was empty afterwards and no quarantine file existed.
 - Roll-up: 21 requests over 40 seconds with a 20 second window produced 5 entries whose counts summed to exactly the 21 sent.
 - An edited copy and a truncated copy of a log were reported FAILED (exit code 2).
+- Heartbeat watcher, scripted run with a 10 second threshold: three queries, 25 seconds of silence, one more query. Exactly one heartbeat_missed (written 11 seconds after the last request) and one heartbeat_resumed (gap 27 seconds). No false entry at startup and none for a device when the gateway stopped.
+- Stopping the gateway with a roll-up window still open wrote the pending roll-up before the store closed (same scripted run).
 
 ## Not verified, and known gaps
 
 - loggedOsUser is "unknown" on every entry, and agent events carry policyVersion 0 (not reported). Entries identify a device, not a person.
-- Nothing emits heartbeat_missed, auth_rejected, device_revoked, dns_allowed_summary or retention_expired, and there is no event for crash recovery or for recovery from fail-closed.
-- The missed-heartbeat watcher, the only server-side way to notice a silent or tampered agent, is not built.
+- Nothing emits auth_rejected, device_revoked, dns_allowed_summary or retention_expired, and there is no event for crash recovery or for recovery from fail-closed.
+- The heartbeat watcher uses any authenticated request as its sign of life; the agent sends no dedicated heartbeat. An idle but healthy laptop can raise a false alarm, and silence cannot tell a killed agent from a closed lid. Read heartbeat entries together with agent_stopped and fail-open entries.
 - No process signs checkpoints, and key custody is undecided.
 - Reset events under-report the gap: detectedAt is when the watcher noticed it.
-- Stopping the gateway with a roll-up window still open is covered by a unit test only, not by a live run.
+- Heartbeat state lives in memory: after a gateway restart a long outage can be reported twice (lastSeenSource says when lastSeenAt is the gateway's start). Behavior with many devices and real sleep patterns is untested.
 - When agent and gateway share a laptop, the gateway's lookup of its own upstream hostname is blocked by the enforcement. Use an IP-based upstream.
 - A device with a wrong clock has its events quarantined by the time bounds.
 - Production needs TLS, a PostgreSQL backend, a retention period with a data-protection review, and a Windows agent. None of these exists.
