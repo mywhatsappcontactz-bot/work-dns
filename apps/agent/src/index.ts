@@ -11,3 +11,4 @@ export * from './restore.js';
 export * from './outbox.js';
 export * from './event-sender.js';
 export * from './audit-reporter.js';
+export * from './session-user.js';
