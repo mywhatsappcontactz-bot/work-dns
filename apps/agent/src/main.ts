@@ -8,6 +8,7 @@ import { AgentEventSender } from './event-sender.js';
 import { LocalEventQueue } from './local-queue.js';
 import { AgentOutbox } from './outbox.js';
 import { LinuxPlatformAdapter } from './platform/linux-adapter.js';
+import { SessionUserResolver } from './session-user.js';
 
 export type AgentLog = (level: 'info' | 'error', message: string, fields?: Record<string, unknown>) => void;
 
@@ -241,6 +242,7 @@ export async function startAgent(env: NodeJS.ProcessEnv): Promise<AgentHandle> {
     failOpenMaxMinutes: FAIL_OPEN_MAX_MINUTES,
     onRecorded: () => sender.kick(),
   });
+  const userResolver = new SessionUserResolver();
   const stub = new DnsStubServer(
     {
       loopbackPort: config.loopbackPort,
@@ -249,15 +251,32 @@ export async function startAgent(env: NodeJS.ProcessEnv): Promise<AgentHandle> {
       fallbackUpstreamDoh: config.fallbackDohUrl,
       failOpenMaxMinutes: FAIL_OPEN_MAX_MINUTES,
       onStateChange: (change) => reporter.gatewayStateChanged(change),
+      consoleUser: () => userResolver.current(),
     },
     adapter,
     queue
   );
-  return runAgent({
-    stub,
-    adapter,
-    port: config.loopbackPort,
-    startMonitor: spawnNmcliMonitor,
-    audit: { reporter, sender, enforcedDevices: () => adapter.enforcedDevices() },
-  });
+  userResolver.start();
+  let handle: AgentHandle;
+  try {
+    handle = await runAgent({
+      stub,
+      adapter,
+      port: config.loopbackPort,
+      startMonitor: spawnNmcliMonitor,
+      audit: { reporter, sender, enforcedDevices: () => adapter.enforcedDevices() },
+    });
+  } catch (err) {
+    userResolver.stop();
+    throw err;
+  }
+  return {
+    stop: async () => {
+      try {
+        await handle.stop();
+      } finally {
+        userResolver.stop();
+      }
+    },
+  };
 }

@@ -3,6 +3,7 @@ import dnsPacket from 'dns-packet';
 import { PlatformAdapter, NotificationOptions } from './platform/adapter.js';
 import { LocalEventQueue, QueuedOfflineEvent } from './local-queue.js';
 import { buildErrorResponse } from './dns-response.js';
+import { UNKNOWN_USER, sanitizeUserName } from './session-user.js';
 
 const DNS_MESSAGE_TYPE = 'application/dns-message';
 const HEADER_LENGTH = 12;
@@ -10,6 +11,8 @@ const MAX_DNS_MESSAGE_BYTES = 16_384;
 const MAX_TRACKED_KEYS = 1_000;
 const LOG_COOLDOWN_MS = 5_000;
 const DEFAULT_NOTIFICATION_COOLDOWN_MS = 30_000;
+/** The gateway reads this header. It is sent to the gateway only, never to the fallback resolver. */
+export const USER_HEADER = 'X-Work-Dns-User';
 
 export interface DnsStubConfig {
   loopbackPort: number; // 53 in production; 0 or a high port for tests
@@ -27,6 +30,8 @@ export interface DnsStubConfig {
   eventSink?: (events: QueuedOfflineEvent[]) => Promise<void>;
   /** Called when the gateway state changes. A throwing callback is logged and ignored. */
   onStateChange?: (change: GatewayStateChange) => void;
+  /** Returns the name of the person at the machine console, or unknown. Sent to the gateway only. */
+  consoleUser?: () => string;
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
   /** Clock in epoch milliseconds (injectable for tests). */
@@ -127,6 +132,7 @@ export class DnsStubServer {
   private readonly requestAccessUrl: string | undefined;
   private readonly eventSink: ((events: QueuedOfflineEvent[]) => Promise<void>) | undefined;
   private readonly onStateChange: ((change: GatewayStateChange) => void) | undefined;
+  private readonly consoleUser: (() => string) | undefined;
   private readonly fetchImpl: typeof fetch | undefined;
   private readonly now: () => number;
 
@@ -169,6 +175,7 @@ export class DnsStubServer {
     this.requestAccessUrl = config.requestAccessUrl;
     this.eventSink = config.eventSink;
     this.onStateChange = config.onStateChange;
+    this.consoleUser = config.consoleUser;
     this.fetchImpl = config.fetchImpl;
     this.now = config.now ?? Date.now;
   }
@@ -347,6 +354,23 @@ export class DnsStubServer {
     }
   }
 
+  /**
+   * The console user as a header for the gateway. Never sent to the fallback resolver, and never an unsafe
+   * value: a header that fetch refuses would look like an unreachable gateway and trigger fail-open.
+   */
+  private userHeaders(): Record<string, string> {
+    const provider = this.consoleUser;
+    if (!provider) return {};
+    let name: string;
+    try {
+      name = sanitizeUserName(provider());
+    } catch (err) {
+      this.logLimited('console-user', 'console user lookup failed; sending no user', { error: errorMessageOf(err) });
+      return {};
+    }
+    return name === UNKNOWN_USER ? {} : { [USER_HEADER]: name };
+  }
+
   private emitStateChange(from: GatewayState, to: GatewayState, outageStartMs: number | null): void {
     const callback = this.onStateChange;
     if (!callback) return;
@@ -448,6 +472,7 @@ export class DnsStubServer {
   ): Promise<{ response: Buffer; isBlock: boolean }> {
     const result = await this.postDns(this.gatewayUrl, queryBuffer, {
       Authorization: `Bearer ${this.deviceToken}`,
+      ...this.userHeaders(),
     });
 
     if (result.status === 401 || result.status === 403) {
