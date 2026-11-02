@@ -37,8 +37,8 @@ const DEFAULT_MAX_BATCH_SIZE = 100;
 const DEFAULT_FLUSH_INTERVAL_MS = 5_000;
 const DROP_LOG_EVERY = 1_000;
 
-function keyOf(r: Pick<BlockedAttemptRecord, 'companyId' | 'deviceId' | 'domain'>): string {
-  return JSON.stringify([r.companyId, r.deviceId, r.domain]);
+function keyOf(r: Pick<BlockedAttemptRecord, 'companyId' | 'deviceId' | 'domain' | 'loggedOsUser'>): string {
+  return JSON.stringify([r.companyId, r.deviceId, r.domain, r.loggedOsUser]);
 }
 
 function errorMessageOf(err: unknown): string {

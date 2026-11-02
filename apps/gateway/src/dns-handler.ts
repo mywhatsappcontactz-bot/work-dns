@@ -63,7 +63,8 @@ export class DnsHandler {
   public async handleDnsMessage(
     rawBuffer: Buffer,
     deviceCtx: AuthenticatedDeviceContext,
-    clientIp?: string
+    clientIp?: string,
+    consoleUser?: string
   ): Promise<DnsHandlerResult> {
     const startTime = process.hrtime.bigint();
     const elapsedMicroseconds = (): number =>
@@ -192,8 +193,8 @@ export class DnsHandler {
         companyId: deviceCtx.companyId,
         deviceId: deviceCtx.deviceId,
         domain: queriedDomain,
-        // UNVERIFIED placeholder: replace with the real OS user reported by the agent.
-        loggedOsUser: 'unknown',
+        // The console user the device claims (already validated by the server): the gateway cannot verify it.
+        loggedOsUser: consoleUser ?? 'unknown',
         policyVersion: policy?.version ?? 1,
         reasonCode,
         ...(clientIp !== undefined ? { clientIp } : {}),

@@ -12,6 +12,7 @@ export function toPayload(record: BlockedAttemptRecord): DnsBlockedPayload {
     count: record.count,
     ...(record.clientIp !== undefined ? { clientIp: record.clientIp } : {}),
     ...(record.lastSeenAt !== undefined ? { lastSeenAt: record.lastSeenAt } : {}),
+    ...(record.loggedOsUser !== 'unknown' ? { loggedOsUserSource: 'device_reported' as const } : {}),
   };
 }
 

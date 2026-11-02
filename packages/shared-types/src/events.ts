@@ -65,6 +65,8 @@ export interface DnsBlockedPayload {
   /** For rollups: the window the repeats fall in. */
   windowStart?: string;
   windowEnd?: string;
+  /** Set when loggedOsUser is a name: it is the person at the console as the device reported it, not proof of who made the request. */
+  loggedOsUserSource?: 'device_reported';
 }
 
 export interface DeviceEnrolledPayload {

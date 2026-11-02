@@ -28,6 +28,15 @@ const MAX_FORWARDED_ADDRESS_LENGTH = 64;
 const AUTH_LOG_INTERVAL_MS = 1_000;
 const MAX_AGENT_EVENTS_BODY_BYTES = 65_536;
 
+const USER_HEADER = 'x-work-dns-user';
+const USER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.@-]{0,63}$/;
+
+/** The console user the agent claims. Untrusted: anything that is not a plain username is ignored. */
+function consoleUserOf(req: http.IncomingMessage): string | undefined {
+  const raw = req.headers[USER_HEADER];
+  return typeof raw === 'string' && USER_NAME.test(raw) ? raw : undefined;
+}
+
 class HttpError extends Error {
   readonly status: number;
 
@@ -383,7 +392,7 @@ export class DohServer {
     }
 
     // 3. Resolve.
-    const result = await this.handler.handleDnsMessage(dnsMessage, authResult.context, clientIp);
+    const result = await this.handler.handleDnsMessage(dnsMessage, authResult.context, clientIp, consoleUserOf(req));
     if (result.statusCode !== 200 || !result.responseBuffer) {
       this.sendJson(res, result.statusCode, { error: result.errorMessage ?? 'Bad Request' });
       return;

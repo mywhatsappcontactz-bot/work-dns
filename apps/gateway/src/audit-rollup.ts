@@ -127,6 +127,7 @@ export function createRollupAuditSink(
       windowStart: new Date(w.startMs).toISOString(),
       windowEnd: new Date(endMs).toISOString(),
       ...(w.first.clientIp !== undefined ? { clientIp: w.first.clientIp } : {}),
+      ...(w.first.loggedOsUser !== 'unknown' ? { loggedOsUserSource: 'device_reported' as const } : {}),
     };
     store.append({ id, type: 'dns_blocked', companyId: w.first.companyId, deviceId: w.first.deviceId, payload });
   };
