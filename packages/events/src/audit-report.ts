@@ -40,6 +40,8 @@ export interface AuditReport {
   topDomains: Array<{ domain: string; attempts: number }>;
   /** Matched dns_blocked events with no verified OS user. */
   unattributedBlocks: number;
+  /** Matched dns_blocked entries that name a console user as reported by the device. Unverified. */
+  claimedUserBlocks: number;
   caveats: string[];
 }
 
@@ -58,6 +60,7 @@ export const CSV_COLUMNS = [
   'deviceId',
   'domain',
   'loggedOsUser',
+  'loggedOsUserSource',
   'policyVersion',
   'reasonCode',
   'ruleId',
@@ -135,6 +138,7 @@ export function eventsToCsv(events: EventEnvelope[]): string {
       event.deviceId,
       stringField(p, 'domain'),
       stringField(p, 'loggedOsUser'),
+      stringField(p, 'loggedOsUserSource'),
       numberField(p, 'policyVersion'),
       stringField(p, 'reasonCode'),
       stringField(p, 'ruleId'),
@@ -200,6 +204,7 @@ export function buildReport(source: CheckpointSource, companyId: CompanyId, opti
   const perDomain = new Map<string, number>();
   let blockedAttempts = 0;
   let unattributedBlocks = 0;
+  let claimedUserBlocks = 0;
   for (const event of matched) {
     byType[event.type] = (byType[event.type] ?? 0) + 1;
     if (event.type !== 'dns_blocked') continue;
@@ -212,9 +217,16 @@ export function buildReport(source: CheckpointSource, companyId: CompanyId, opti
     }
     const user = stringField(event.payload, 'loggedOsUser');
     if (user === undefined || user === '' || user === 'unknown') unattributedBlocks += 1;
+    else claimedUserBlocks += 1;
   }
   if (unattributedBlocks > 0) {
     caveats.push(`${unattributedBlocks} blocked entr(ies) carry no verified OS user (loggedOsUser is "unknown"): they identify a device, not a person.`);
+  }
+
+  if (claimedUserBlocks > 0) {
+    caveats.push(
+      `${claimedUserBlocks} blocked entr(ies) name a console user as reported by the device. The name is who was at the keyboard, not which program made the request, and the gateway cannot verify it: background programs and system checks are recorded under the same name.`
+    );
   }
 
   const topDomains = [...perDomain.entries()]
@@ -235,6 +247,7 @@ export function buildReport(source: CheckpointSource, companyId: CompanyId, opti
     blockedAttempts,
     topDomains,
     unattributedBlocks,
+    claimedUserBlocks,
     caveats,
   };
 }
