@@ -2,7 +2,7 @@
 
 Status: Accepted for the local spike. The production design differs where noted.
 Date: 2026-10-30
-Updated: 2026-11-01 (heartbeat watcher; verification status corrected)
+Updated: heartbeat watcher (2026-11-01); console user attribution
 
 ## Context
 
@@ -73,6 +73,14 @@ POST /api/v1/agent-events on the gateway.
 - stop() writes nothing, so gateway downtime is never blamed on devices. Only active devices are tracked, capped at 10000. A failed write is logged and retried on the next sweep.
 - Limits are listed under "Not verified".
 
+### 9. Console user attribution
+
+- The agent asks systemd-logind for the active local session on seat0 (every 5 seconds, cached, no shell). Only a session of class user that is local, active and in state active counts. A login screen, an SSH session, a failed lookup or an odd-looking name gives "unknown".
+- The name travels in the X-Work-Dns-User header to the configured gateway only, never to the fallback resolver. The agent and the gateway each validate it (a plain username of up to 64 characters), and a repeated header is ignored.
+- The gateway stores it in loggedOsUser with loggedOsUserSource "device_reported". The name is part of the queue's merge key and of the roll-up window key, so attempts under different names are never merged.
+- It names the person at the console, not the program that made the request. Background programs and system checks are recorded under the same name, and the gateway cannot verify it: a holder of a device token can claim any name. Reports count these entries separately (claimedUserBlocks), print a caveat, and the CSV export has a loggedOsUserSource column.
+- Privacy: a name next to blocked domains is personal data. The header is plain text over loopback in the spike, so production needs TLS and a bounded retention period.
+
 ## Verified live (Phase 0 laptop)
 
 - Blocked attempts written by the running gateway into the store; the chain verified.
@@ -83,10 +91,11 @@ POST /api/v1/agent-events on the gateway.
 - An edited copy and a truncated copy of a log were reported FAILED (exit code 2).
 - Heartbeat watcher, scripted run with a 10 second threshold: three queries, 25 seconds of silence, one more query. Exactly one heartbeat_missed (written 11 seconds after the last request) and one heartbeat_resumed (gap 27 seconds). No false entry at startup and none for a device when the gateway stopped.
 - Stopping the gateway with a roll-up window still open wrote the pending roll-up before the store closed (same scripted run).
+- Console user attribution, unattended run with the real agent and gateway on the laptop: blocked entries carried user "berlin" with source "device_reported" (69 attempts, of which the test caused 12; the rest were background lookups), one entry was recorded as "unknown" without a marker, the outbox was empty with no quarantine file, the chain verified, and resolv.conf was back on the router afterwards.
 
 ## Not verified, and known gaps
 
-- loggedOsUser is "unknown" on every entry, and agent events carry policyVersion 0 (not reported). Entries identify a device, not a person.
+- User names are claims, not proof: the console user is recorded for every program that runs while that person is logged in. The real loginctl call is verified from a shell only, not inside the systemd sandbox. Switching between two console users was not run live (a unit test keeps them apart). One entry in the live run was recorded as "unknown", probably the agent's startup probe, which was not confirmed. Agent events still carry policyVersion 0, and agent_started says "unknown".
 - Nothing emits auth_rejected, device_revoked, dns_allowed_summary or retention_expired, and there is no event for crash recovery or for recovery from fail-closed.
 - The heartbeat watcher uses any authenticated request as its sign of life; the agent sends no dedicated heartbeat. An idle but healthy laptop can raise a false alarm, and silence cannot tell a killed agent from a closed lid. Read heartbeat entries together with agent_stopped and fail-open entries.
 - No process signs checkpoints, and key custody is undecided.
