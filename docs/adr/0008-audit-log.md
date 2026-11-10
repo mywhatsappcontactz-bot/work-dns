@@ -2,7 +2,7 @@
 
 Status: Accepted for the local spike. The production design differs where noted.
 Date: 2026-10-30
-Updated: heartbeat watcher (2026-11-01); console user attribution
+Updated: heartbeat watcher (2026-11-01); console user attribution; systemd service verified (2026-11-09)
 
 ## Context
 
@@ -92,10 +92,11 @@ POST /api/v1/agent-events on the gateway.
 - Heartbeat watcher, scripted run with a 10 second threshold: three queries, 25 seconds of silence, one more query. Exactly one heartbeat_missed (written 11 seconds after the last request) and one heartbeat_resumed (gap 27 seconds). No false entry at startup and none for a device when the gateway stopped.
 - Stopping the gateway with a roll-up window still open wrote the pending roll-up before the store closed (same scripted run).
 - Console user attribution, unattended run with the real agent and gateway on the laptop: blocked entries carried user "berlin" with source "device_reported" (69 attempts, of which the test caused 12; the rest were background lookups), one entry was recorded as "unknown" without a marker, the outbox was empty with no quarantine file, the chain verified, and resolv.conf was back on the router afterwards.
+- The real systemd service (build 8c979b0, account work-dns) against a local gateway with an IP-based upstream: it enforced DNS, blocked entries named the console user (so loginctl works inside the unit), agent_started and enforcement_applied reached the log, and the outbox was empty. After kill -9 on the service, ExecStopPost restored DNS by itself (state failed, result signal) and lookups worked again.
 
 ## Not verified, and known gaps
 
-- User names are claims, not proof: the console user is recorded for every program that runs while that person is logged in. The real loginctl call is verified from a shell only, not inside the systemd sandbox. Switching between two console users was not run live (a unit test keeps them apart). One entry in the live run was recorded as "unknown", probably the agent's startup probe, which was not confirmed. Agent events still carry policyVersion 0, and agent_started says "unknown".
+- User names are claims, not proof: the console user is recorded for every program that runs while that person is logged in. The real loginctl call was verified from a shell and inside the current systemd unit (which has only light hardening: no filesystem sandboxing), so any hardening added later must be re-tested. Switching between two console users was not run live (a unit test keeps them apart). One entry in the live run was recorded as "unknown", probably the agent's startup probe, which was not confirmed. Agent events still carry policyVersion 0, and agent_started says "unknown".
 - Nothing emits auth_rejected, device_revoked, dns_allowed_summary or retention_expired, and there is no event for crash recovery or for recovery from fail-closed.
 - The heartbeat watcher uses any authenticated request as its sign of life; the agent sends no dedicated heartbeat. An idle but healthy laptop can raise a false alarm, and silence cannot tell a killed agent from a closed lid. Read heartbeat entries together with agent_stopped and fail-open entries.
 - No process signs checkpoints, and key custody is undecided.
@@ -104,5 +105,7 @@ POST /api/v1/agent-events on the gateway.
 - When agent and gateway share a laptop, the gateway's lookup of its own upstream hostname is blocked by the enforcement. Use an IP-based upstream.
 - A device with a wrong clock has its events quarantined by the time bounds.
 - Production needs TLS, a PostgreSQL backend, a retention period with a data-protection review, and a Windows agent. None of these exists.
-- The systemd service in /opt/work-dns runs an older build.
+- The systemd service runs a snapshot copy in /opt/work-dns, refreshed by hand with scripts/deploy-local.sh (last deployed: commit 8c979b0). There is no automatic deploy and no signed release.
+- A crash writes no event: ExecStopPost restores DNS but records nothing, so the log shows enforcement_applied with no matching end. Only a missed heartbeat could hint at it, and only while the gateway is up.
+- The gateway itself still runs from a terminal as the administrator, not as a service under its own account, so the audit database is owned by the person being audited.
 - Privacy: blocked-domain entries record browsing. Only domains are stored, never URLs, and retention must be bounded.
